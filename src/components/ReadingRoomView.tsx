@@ -416,7 +416,7 @@ export const ReadingRoomView: React.FC<ReadingRoomViewProps> = ({
       <div className="flex flex-wrap items-end justify-between gap-6 pb-6 border-b border-stone-200 dark:border-zinc-800">
         <div className="flex items-start gap-5">
           <img
-            src="/reading-owl-mascot.png"
+            src={`${import.meta.env.BASE_URL}reading-owl-mascot.png`}
             alt="1600s Dutch Engraving of The Reading Owl — Archive Mine Own Mascot"
             className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border border-amber-500/40 object-cover shrink-0 shadow-md"
           />
@@ -918,7 +918,7 @@ export const ReadingRoomView: React.FC<ReadingRoomViewProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-stone-200 dark:border-zinc-800">
               <div className="flex items-center gap-2.5">
                 <img
-                  src="/reading-owl-mascot.png"
+                  src={`${import.meta.env.BASE_URL}reading-owl-mascot.png`}
                   alt="The Reading Owl Ex Libris"
                   className="w-7 h-7 rounded-full border border-amber-500/40 object-cover"
                 />

@@ -604,7 +604,11 @@ function internetArchiveAo3ScraperPlugin(): Plugin {
 }
 
 export default defineConfig(() => {
+  const rawBase = process.env.VITE_BASE_PATH || '/';
+  const appBase = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
+
   return {
+    base: appBase,
     plugins: [
       react(),
       tailwindcss(),
@@ -613,30 +617,30 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'reading-owl-mascot.png', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
-          id: '/',
+          id: appBase,
           name: 'Archive Mine Own',
           short_name: 'Mine Own',
           description: 'Archive Mine Own — Offline transformative works library, peer-to-peer Reading Room cache trading, and unique annotated bookmark editions.',
           theme_color: '#0C0C0E',
           background_color: '#0C0C0E',
           display: 'standalone',
-          start_url: '/',
-          scope: '/',
+          start_url: appBase,
+          scope: appBase,
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: `${appBase}pwa-192x192.png`,
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: `${appBase}pwa-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: `${appBase}pwa-maskable-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',

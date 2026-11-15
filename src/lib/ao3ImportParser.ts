@@ -529,6 +529,12 @@ export async function recoverAo3WorkFromWayback(workInput: string): Promise<{
   mode: string;
 }> {
   const resp = await fetch(`/api/archive/ao3-wayback?url=${encodeURIComponent(workInput.trim())}`);
+  const contentType = resp.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      'Wayback server proxy is unavailable on static GitHub Pages hosting. Download the HTML or EPUB directly from AO3 and drop it into the file importer.'
+    );
+  }
   const data = await resp.json();
   if (!resp.ok || !data.html) {
     throw new Error(

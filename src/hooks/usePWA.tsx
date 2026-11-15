@@ -137,7 +137,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-stone-200 dark:border-zinc-800">
               <div className="flex items-center gap-2.5">
                 <img
-                  src="/reading-owl-mascot.png"
+                  src={`${import.meta.env.BASE_URL}reading-owl-mascot.png`}
                   alt="The Reading Owl mascot"
                   className="w-8 h-8 rounded-full border border-amber-500/40 object-cover shrink-0"
                 />

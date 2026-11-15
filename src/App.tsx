@@ -1683,7 +1683,7 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
           className="flex items-center gap-3 text-2xl font-serif-editorial font-semibold tracking-tight text-stone-900 dark:text-zinc-100 whitespace-nowrap shrink-0"
         >
           <img
-            src="/reading-owl-mascot.png"
+            src={`${import.meta.env.BASE_URL}reading-owl-mascot.png`}
             alt="The Reading Owl — 1600s Dutch Mascot"
             className="w-8 h-8 rounded-full border border-amber-500/40 object-cover shrink-0"
           />
@@ -2515,7 +2515,7 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
                     <div className="lg:col-span-8 flex flex-col sm:flex-row sm:items-center gap-6">
                       <img
-                        src="/reading-owl-mascot.png"
+                        src={`${import.meta.env.BASE_URL}reading-owl-mascot.png`}
                         alt="1600s Dutch Drawing of The Reading Owl — Mascot of Archive Mine Own"
                         className="w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-amber-500/40 object-cover shrink-0 shadow-lg"
                       />
@@ -3851,7 +3851,7 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
         <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-4">
           <span className="flex items-center gap-2">
             <img
-              src="/reading-owl-mascot.png"
+              src={`${import.meta.env.BASE_URL}reading-owl-mascot.png`}
               alt="The Reading Owl"
               className="w-5 h-5 rounded-full border border-amber-500/30 object-cover"
             />

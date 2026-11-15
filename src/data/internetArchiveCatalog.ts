@@ -1049,16 +1049,57 @@ export async function fetchInternetArchiveItemText(identifier: string): Promise<
   fileName?: string;
   isTruncated?: boolean;
 }> {
-  const resp = await fetch(`/api/archive/item?id=${encodeURIComponent(identifier)}`);
-  if (!resp.ok) {
+  try {
+    const resp = await fetch(`/api/archive/item?id=${encodeURIComponent(identifier)}`);
+    if (resp.ok && resp.headers.get('content-type')?.includes('application/json')) {
+      const data = await resp.json();
+      return {
+        extractedText: data.extractedText || '',
+        archiveUrl: data.archiveUrl || `https://archive.org/details/${identifier}`,
+        fileFormat: data.fileFormat || '',
+        fileName: data.fileName || '',
+        isTruncated: Boolean(data.isTruncated),
+      };
+    }
+  } catch {
+    // Fall through to direct browser fetch when deployed statically (e.g. GitHub Pages)
+  }
+
+  // Direct archive.org metadata lookup for static GitHub Pages deployments
+  const metaResp = await fetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`);
+  if (!metaResp.ok) {
     throw new Error('Could not retrieve full text from Internet Archive');
   }
-  const data = await resp.json();
+  const meta = await metaResp.json();
+  const files: Array<{ name: string; format?: string }> = Array.isArray(meta?.files)
+    ? meta.files
+    : [];
+  const candidate =
+    files.find((f) => /\.(txt|html?)$/i.test(f.name) && !/_meta\.|filelist\.txt/i.test(f.name)) ||
+    files.find((f) => f.format === 'DjVuTXT');
+
+  if (!candidate) {
+    throw new Error('No direct browser-readable text file found for this item on static hosting.');
+  }
+  const dlResp = await fetch(
+    `https://archive.org/download/${encodeURIComponent(identifier)}/${candidate.name
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/')}`
+  );
+  if (!dlResp.ok) {
+    throw new Error('Archive download blocked or unavailable from browser.');
+  }
+  const raw = await dlResp.text();
+  const extractedText = /\.html?$/i.test(candidate.name)
+    ? raw.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>|<[^>]+>/gi, ' ').replace(/\s{2,}/g, '\n\n').trim()
+    : raw.trim();
+
   return {
-    extractedText: data.extractedText || '',
-    archiveUrl: data.archiveUrl || `https://archive.org/details/${identifier}`,
-    fileFormat: data.fileFormat || '',
-    fileName: data.fileName || '',
-    isTruncated: Boolean(data.isTruncated),
+    extractedText: extractedText.slice(0, 8_000_000),
+    archiveUrl: `https://archive.org/details/${identifier}`,
+    fileFormat: candidate.name.split('.').pop()?.toUpperCase() || 'Text',
+    fileName: candidate.name,
+    isTruncated: false,
   };
 }
