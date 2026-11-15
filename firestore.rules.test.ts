@@ -121,4 +121,12 @@ export const DIRTY_DOZEN_TEST_CASES: SecurityTestCase[] = [
     payload: { workId: 'missing_work_id', readerUid: 'uid_reader' },
     expectedResult: 'PERMISSION_DENIED',
   },
+  {
+    id: 13,
+    name: 'Cross-User Reading Room Peer Scraping',
+    operation: 'get',
+    path: '/readingRoomPeers/victim_peer_1',
+    auth: { uid: 'uid_attacker', email_verified: true },
+    expectedResult: 'PERMISSION_DENIED',
+  },
 ];

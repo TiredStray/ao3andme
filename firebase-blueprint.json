@@ -357,6 +357,10 @@
           "type": "boolean",
           "description": "Whether the work is pinned to favorites"
         },
+        "isPublicNote": {
+          "type": "boolean",
+          "description": "Whether personalNotes and userTags are publicly appended when sharing editions in the Reading Room"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -381,6 +385,102 @@
         "personalNotes",
         "userTags",
         "isFavorite",
+        "isPublicNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ReadingRoomPeer": {
+      "title": "ReadingRoomPeer",
+      "description": "A reader or author added to the user's Reading Room roster for offline cache trading and integrity verification.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the Reading Room owner",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "peerCode": {
+          "type": "string",
+          "description": "Unique shareable Reading Room identifier for the friend or author",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "peerName": {
+          "type": "string",
+          "description": "Display pen name of the friend or author",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "description": "Community role of the peer",
+          "enum": [
+            "Reader",
+            "Author",
+            "Archivist"
+          ]
+        },
+        "publicKeyFingerprint": {
+          "type": "string",
+          "description": "SHA-256 / ECDSA public key fingerprint used to verify signed offline bundles",
+          "minLength": 4,
+          "maxLength": 128
+        },
+        "sharedFandoms": {
+          "type": "array",
+          "description": "Bounded list of up to 10 shared fandoms",
+          "maxLength": 10
+        },
+        "knownWorkIds": {
+          "type": "array",
+          "description": "Bounded list of up to 10 highlight work IDs in peer's cache",
+          "maxLength": 10
+        },
+        "tradeCount": {
+          "type": "integer",
+          "description": "Number of offline Link Cable trades completed with this peer"
+        },
+        "status": {
+          "type": "string",
+          "description": "Roster status; Archived is terminal",
+          "enum": [
+            "Connected",
+            "Pinned",
+            "Archived"
+          ]
+        },
+        "notes": {
+          "type": "string",
+          "description": "Personal notes about this reading room friend or author",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last synced server timestamp"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "peerCode",
+        "peerName",
+        "role",
+        "publicKeyFingerprint",
+        "sharedFandoms",
+        "knownWorkIds",
+        "tradeCount",
+        "status",
+        "notes",
         "createdAt",
         "updatedAt"
       ]
@@ -410,6 +510,12 @@
         "$ref": "#/entities/Bookmark"
       },
       "description": "Cloud-synchronized reading progress and bookmarks per user."
+    },
+    "/readingRoomPeers/{peerId}": {
+      "schema": {
+        "$ref": "#/entities/ReadingRoomPeer"
+      },
+      "description": "Cloud-synchronized Reading Room friends and followed authors roster per user."
     }
   }
 }

@@ -108,12 +108,12 @@ service cloud.firestore {
       return data.keys().hasAll([
         'ownerUid', 'ficSlug', 'ficTitle', 'ficAuthor', 'ficFandom',
         'currentChapter', 'totalChapters', 'progressPercent', 'readingStatus',
-        'personalNotes', 'userTags', 'isFavorite', 'createdAt', 'updatedAt'
+        'personalNotes', 'userTags', 'isFavorite', 'isPublicNote', 'createdAt', 'updatedAt'
       ]) &&
       data.keys().hasOnly([
         'ownerUid', 'ficSlug', 'ficTitle', 'ficAuthor', 'ficFandom',
         'currentChapter', 'totalChapters', 'progressPercent', 'readingStatus',
-        'personalNotes', 'userTags', 'isFavorite', 'createdAt', 'updatedAt'
+        'personalNotes', 'userTags', 'isFavorite', 'isPublicNote', 'createdAt', 'updatedAt'
       ]) &&
       data.ownerUid is string && isValidId(data.ownerUid) && data.ownerUid == request.auth.uid &&
       data.ficSlug is string && isValidId(data.ficSlug) &&
@@ -128,6 +128,34 @@ service cloud.firestore {
       data.userTags is list && data.userTags.size() >= 1 && data.userTags.size() <= 10 &&
       data.userTags[0] is string && data.userTags[0].size() >= 1 && data.userTags[0].size() <= 60 &&
       data.isFavorite is bool &&
+      data.isPublicNote is bool &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidReadingRoomPeer(data) {
+      return data.keys().hasAll([
+        'ownerUid', 'peerCode', 'peerName', 'role', 'publicKeyFingerprint',
+        'sharedFandoms', 'knownWorkIds', 'tradeCount', 'status', 'notes',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerUid', 'peerCode', 'peerName', 'role', 'publicKeyFingerprint',
+        'sharedFandoms', 'knownWorkIds', 'tradeCount', 'status', 'notes',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.ownerUid is string && isValidId(data.ownerUid) && data.ownerUid == request.auth.uid &&
+      data.peerCode is string && isValidId(data.peerCode) &&
+      data.peerName is string && data.peerName.size() >= 1 && data.peerName.size() <= 80 &&
+      data.role is string && data.role in ['Reader', 'Author', 'Archivist'] &&
+      data.publicKeyFingerprint is string && data.publicKeyFingerprint.size() >= 4 && data.publicKeyFingerprint.size() <= 128 &&
+      data.sharedFandoms is list && data.sharedFandoms.size() >= 1 && data.sharedFandoms.size() <= 10 &&
+      data.sharedFandoms[0] is string && data.sharedFandoms[0].size() >= 1 && data.sharedFandoms[0].size() <= 60 &&
+      data.knownWorkIds is list && data.knownWorkIds.size() >= 1 && data.knownWorkIds.size() <= 10 &&
+      data.knownWorkIds[0] is string && data.knownWorkIds[0].size() >= 1 && data.knownWorkIds[0].size() <= 60 &&
+      data.tradeCount is int && data.tradeCount >= 0 && data.tradeCount <= 100000 &&
+      data.status is string && data.status in ['Connected', 'Pinned', 'Archived'] &&
+      data.notes is string && data.notes.size() >= 0 && data.notes.size() <= 500 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -266,16 +294,52 @@ service cloud.firestore {
         incoming().ficSlug == existing().ficSlug &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
-          // Action 1: Update Reading Progress & Shelf Status
+          // Action 1: Update Reading Progress, Shelf Status & Public Bookmark Note Visibility
           incoming().diff(existing()).affectedKeys().hasOnly([
             'currentChapter', 'totalChapters', 'progressPercent',
             'readingStatus', 'personalNotes', 'userTags', 'isFavorite',
-            'ficTitle', 'ficAuthor', 'ficFandom', 'updatedAt'
+            'isPublicNote', 'ficTitle', 'ficAuthor', 'ficFandom', 'updatedAt'
           ])
         );
 
       allow delete: if isVerifiedUser() &&
         isValidId(bookmarkId) &&
+        existing().ownerUid == request.auth.uid;
+    }
+
+    // 6. Collection Rules: /readingRoomPeers/{peerId}
+    match /readingRoomPeers/{peerId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(peerId) &&
+        existing().ownerUid == request.auth.uid;
+
+      allow list: if isVerifiedUser() &&
+        existing().ownerUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(peerId) &&
+        isValidReadingRoomPeer(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(peerId) &&
+        isValidReadingRoomPeer(incoming()) &&
+        existing().ownerUid == request.auth.uid &&
+        existing().status != 'Archived' &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().peerCode == existing().peerCode &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'peerName', 'role', 'publicKeyFingerprint', 'sharedFandoms',
+            'knownWorkIds', 'tradeCount', 'status', 'notes', 'updatedAt'
+          ])
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(peerId) &&
         existing().ownerUid == request.auth.uid;
     }
   }

@@ -15,6 +15,9 @@
 6. **Private Cloud Bookmark Isolation**:
    - A `Bookmark` (`/bookmarks/{bookmarkId}`) is strictly isolated to `ownerUid == request.auth.uid` for `get`, `list`, `create`, `update`, and `delete`.
    - Once `existing().readingStatus == 'Archived'`, the bookmark is locked from further updates unless unarchived or deleted by the owner.
+7. **Reading Room Peer Isolation**:
+   - A `ReadingRoomPeer` (`/readingRoomPeers/{peerId}`) is strictly isolated to `ownerUid == request.auth.uid` for `get`, `list`, `create`, `update`, and `delete`.
+   - Arrays `sharedFandoms` and `knownWorkIds` are bounded to 1–10 string elements, and `status == 'Archived'` locks the record from subsequent updates.
 
 ---
 

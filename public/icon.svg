@@ -1,7 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
   <rect width="512" height="512" rx="96" fill="#0C0C0E"/>
-  <rect x="24" y="24" width="464" height="464" rx="76" stroke="#27272A" stroke-width="4"/>
-  <path d="M138 368L216 144H256L334 368H292L274 312H198L180 368H138ZM210 276H262L236 194L210 276Z" fill="#F4F4F5"/>
-  <path d="M352 164C382 164 404 188 404 224C404 260 382 284 352 284C322 284 300 260 300 224C300 188 322 164 352 164ZM352 196C336 196 326 208 326 224C326 240 336 252 352 252C368 252 378 240 378 224C378 208 368 196 352 196Z" fill="#E11D48"/>
-  <path d="M136 404H376" stroke="#E11D48" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="220" fill="#181512" stroke="#D4AF37" stroke-width="6" stroke-opacity="0.7"/>
+  <circle cx="256" cy="256" r="202" stroke="#A68A56" stroke-width="2" stroke-dasharray="6 6" stroke-opacity="0.5"/>
+  <!-- Owl Silhouette & Perched Reading Pose (1600s Dutch Engraving Motif) -->
+  <!-- Ear Tufts -->
+  <path d="M192 126L218 158L196 168L178 134Z" fill="#EFE6D5"/>
+  <path d="M320 126L294 158L316 168L334 134Z" fill="#EFE6D5"/>
+  <!-- Owl Head & Body -->
+  <path d="M256 144C212 144 184 176 184 220C184 274 206 322 256 336C306 322 328 274 328 220C328 176 300 144 256 144Z" fill="#EFE6D5"/>
+  <!-- Facial Disc Crosshatch Accent -->
+  <circle cx="230" cy="202" r="26" fill="#181512" stroke="#C8A96B" stroke-width="4"/>
+  <circle cx="282" cy="202" r="26" fill="#181512" stroke="#C8A96B" stroke-width="4"/>
+  <!-- Brass Spectacles Bridge & Pupils -->
+  <path d="M252 202H260" stroke="#D4AF37" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="230" cy="202" r="9" fill="#EFE6D5"/>
+  <circle cx="282" cy="202" r="9" fill="#EFE6D5"/>
+  <!-- Beak -->
+  <path d="M256 212L247 232H265L256 212Z" fill="#D4AF37"/>
+  <!-- Wing Feathers -->
+  <path d="M188 232C176 268 190 310 218 326" stroke="#8C6D46" stroke-width="6" stroke-linecap="round"/>
+  <path d="M324 232C336 268 322 310 294 326" stroke="#8C6D46" stroke-width="6" stroke-linecap="round"/>
+  <!-- Open Folio Book Beneath Talons -->
+  <path d="M124 334C172 318 222 324 256 348C290 324 340 318 388 334V402C340 386 290 392 256 414C222 392 172 386 124 402V334Z" fill="#E6D8C0" stroke="#A68A56" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M256 348V414" stroke="#8C6D46" stroke-width="4"/>
+  <path d="M150 352H228M150 370H228M284 352H362M284 370H362" stroke="#8C6D46" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Crimson Archival Bookmark Ribbon -->
+  <path d="M268 354V426L256 416L244 426V354" fill="#E11D48"/>
 </svg>

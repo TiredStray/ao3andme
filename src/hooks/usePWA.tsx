@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Download, WifiOff, Check, Share } from 'lucide-react';
+import { Download, WifiOff, Check, Share, Smartphone } from 'lucide-react';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -10,6 +10,7 @@ export function usePWAInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
+  const [swReady, setSwReady] = useState(false);
 
   useEffect(() => {
     const isStandalone =
@@ -20,6 +21,12 @@ export function usePWAInstall() {
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
     setIsIOS(isIOSDevice);
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then(() => setSwReady(true))
+        .catch(() => setSwReady(false));
+    }
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -56,6 +63,7 @@ export function usePWAInstall() {
     isInstallable: !!deferredPrompt,
     isInstalled,
     isIOS,
+    swReady,
     install,
   };
 }
@@ -81,45 +89,65 @@ export function useOnlineStatus() {
   return isOnline;
 }
 
-export const PWAInstallButton: React.FC = () => {
-  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
+interface PWAInstallButtonProps {
+  variant?: 'header' | 'prominent';
+}
+
+export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
+  variant = 'header',
+}) => {
+  const { isInstallable, isInstalled, isIOS, swReady, install } = usePWAInstall();
   const [showGuide, setShowGuide] = useState(false);
 
+  // Automatically suppress when already running inside an installed standalone PWA
   if (isInstalled) {
     return null;
   }
 
-  if (isInstallable) {
-    return (
-      <button
-        onClick={install}
-        className="flex items-center gap-1.5 rounded border border-stone-300 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-stone-800 dark:text-zinc-200 hover:border-[#E11D48] hover:text-[#E11D48] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        title="Install AO3 Folio as an offline-capable PWA"
-      >
-        <Download className="w-3.5 h-3.5" />
-        <span>Install App</span>
-      </button>
-    );
-  }
+  const handleClick = async () => {
+    if (isInstallable) {
+      const accepted = await install();
+      if (!accepted) {
+        setShowGuide(true);
+      }
+      return;
+    }
+    setShowGuide(true);
+  };
+
+  const buttonClasses =
+    variant === 'prominent'
+      ? 'flex items-center gap-2 rounded bg-[#E11D48] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#BE123C] transition-colors whitespace-nowrap shrink-0 cursor-pointer'
+      : 'flex items-center gap-1.5 rounded bg-stone-900 dark:bg-zinc-100 px-3.5 py-1.5 text-xs font-semibold text-white dark:text-zinc-900 hover:opacity-90 transition-opacity whitespace-nowrap shrink-0 cursor-pointer';
 
   return (
     <>
       <button
-        onClick={() => setShowGuide(true)}
-        className="flex items-center gap-1.5 rounded border border-stone-300 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-stone-700 dark:text-zinc-300 hover:border-[#E11D48] hover:text-[#E11D48] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        title="Install AO3 Folio PWA for offline reading"
+        onClick={handleClick}
+        className={buttonClasses}
+        title="Install Archive Mine Own as a standalone offline PWA"
       >
-        <Download className="w-3.5 h-3.5" />
-        <span>{isIOS ? 'Install on iOS' : 'Install PWA'}</span>
+        <Download className="w-3.5 h-3.5 shrink-0" />
+        <span>Install App</span>
       </button>
 
       {showGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-lg border border-stone-200 dark:border-zinc-800 bg-[#FBF9F5] dark:bg-[#121215] p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-lg border border-stone-200 dark:border-zinc-800 bg-[#FBF9F5] dark:bg-[#121215] p-6 shadow-xl text-left">
             <div className="flex items-center justify-between pb-3 border-b border-stone-200 dark:border-zinc-800">
-              <h3 className="text-xl font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
-                Install AO3 Folio PWA
-              </h3>
+              <div className="flex items-center gap-2.5">
+                <img
+                  src="/reading-owl-mascot.png"
+                  alt="The Reading Owl mascot"
+                  className="w-8 h-8 rounded-full border border-amber-500/40 object-cover shrink-0"
+                />
+                <div className="flex items-center gap-1.5">
+                  <Smartphone className="w-4 h-4 text-[#E11D48]" />
+                  <h3 className="text-xl font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
+                    Install Archive Mine Own
+                  </h3>
+                </div>
+              </div>
               <button
                 onClick={() => setShowGuide(false)}
                 className="text-xs text-stone-500 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-white px-2 py-1 cursor-pointer"
@@ -127,6 +155,7 @@ export const PWAInstallButton: React.FC = () => {
                 Close
               </button>
             </div>
+
             <div className="mt-4 space-y-3 text-sm text-stone-700 dark:text-zinc-300 leading-relaxed">
               {isIOS ? (
                 <>
@@ -134,35 +163,62 @@ export const PWAInstallButton: React.FC = () => {
                     <Share className="w-4 h-4 text-[#E11D48]" />
                     <span>Install on iPhone or iPad (Safari):</span>
                   </p>
-                  <p>
+                  <p className="text-xs leading-relaxed">
                     1. Tap the <strong>Share</strong> button in the Safari toolbar.<br />
-                    2. Scroll down and select <strong>Add to Home Screen</strong>.
+                    2. Scroll down and select <strong>Add to Home Screen</strong>.<br />
+                    3. Launch <strong>Archive Mine Own</strong> from your home screen for full offline reading and Link Cable trading.
                   </p>
                 </>
               ) : (
                 <>
                   <p className="font-medium text-stone-900 dark:text-zinc-100">
-                    Offline-Ready Progressive Web Application
+                    Save as a Standalone Offline Application
                   </p>
-                  <p>
-                    Service worker precaching and offline tag indexing are active. To install as a standalone desktop or mobile app:
+                  <p className="text-xs leading-relaxed">
+                    Once installed, the app shell, cached works, tag index, and reading progress are stored locally on your device so you can keep reading and filtering even when offline or if the remote server is unreachable.
                   </p>
-                  <p className="text-xs text-stone-500 dark:text-zinc-400">
-                    Open the application in a top-level browser tab and click the install icon in the address bar, or select <strong>Install Archive of Our Own — Modern Folio</strong> from your browser menu.
+                  <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed">
+                    If your browser did not automatically open the install prompt (for example, inside an embedded preview frame), open this URL in a top-level Chrome, Edge, or Safari tab and click the <strong>Install</strong> icon in the address bar or browser menu.
                   </p>
                 </>
               )}
-              <div className="pt-2 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400">
-                <Check className="w-3.5 h-3.5" />
-                <span>Offline Tag Filtering & Local Archive Cache Enabled</span>
+
+              <div className="pt-2 space-y-1.5 text-xs">
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+                  <Check className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {swReady
+                      ? 'Service Worker Active — App Shell Precached'
+                      : 'Service Worker Registering for Offline Shell Cache'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+                  <Check className="w-3.5 h-3.5 shrink-0" />
+                  <span>Offline Tag Index &amp; Firestore IndexedDB Cache Ready</span>
+                </div>
               </div>
             </div>
-            <button
-              onClick={() => setShowGuide(false)}
-              className="mt-5 w-full rounded bg-[#E11D48] py-2 px-4 text-xs font-medium text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
-            >
-              Done
-            </button>
+
+            <div className="mt-5 flex items-center gap-3">
+              {isInstallable && (
+                <button
+                  onClick={install}
+                  className="flex-1 rounded bg-[#E11D48] py-2 px-4 text-xs font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+                >
+                  Install Now
+                </button>
+              )}
+              <button
+                onClick={() => setShowGuide(false)}
+                className={`${
+                  isInstallable
+                    ? 'rounded border border-stone-300 dark:border-zinc-700 py-2 px-4 text-xs font-medium text-stone-700 dark:text-zinc-300'
+                    : 'w-full rounded bg-[#E11D48] py-2 px-4 text-xs font-semibold text-white hover:bg-[#BE123C]'
+                } transition-colors cursor-pointer`}
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

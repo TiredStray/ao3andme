@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   onAuthStateChanged,
   type User,
@@ -33,6 +33,7 @@ import {
   Trash2,
   ExternalLink,
   RefreshCw,
+  ChevronLeft,
   ChevronRight,
   SlidersHorizontal,
   FileText,
@@ -41,6 +42,9 @@ import {
   LogOut,
   ArrowLeft,
   Star,
+  Upload,
+  Globe,
+  Feather,
 } from 'lucide-react';
 import {
   auth,
@@ -60,12 +64,28 @@ import {
   type Ao3Category,
   type Ao3Status,
   loadCachedArchivalWorks,
+  loadCachedArchivalWorksFromIdb,
   saveCachedArchivalWorks,
   scrapeInternetArchiveWorks,
   fetchInternetArchiveItemText,
+  splitTextIntoChapters,
+  isArchivalPlaceholderContent,
+  isRealArchiveOrgIdentifier,
 } from './data/internetArchiveCatalog';
+import { ReadingRoomView } from './components/ReadingRoomView';
+import {
+  type ReadingRoomPeerRecord,
+  type TradeImportResult,
+  mergeSharedAnnotations,
+  INITIAL_READING_ROOM_PEERS,
+} from './lib/readingRoomTrade';
+import {
+  parseUploadedAo3File,
+  parseAo3HtmlToWork,
+  recoverAo3WorkFromWayback,
+} from './lib/ao3ImportParser';
 
-type NavTab = 'catalog' | 'dashboard' | 'studio' | 'scraper';
+type NavTab = 'catalog' | 'dashboard' | 'studio' | 'readingRoom' | 'scraper';
 
 export interface BookmarkRecord {
   id: string;
@@ -81,6 +101,7 @@ export interface BookmarkRecord {
   personalNotes: string;
   userTags: string[];
   isFavorite: boolean;
+  isPublicNote: boolean;
   updatedAtIso: string;
   createdAtRaw?: unknown;
 }
@@ -128,6 +149,7 @@ interface FilterPreset {
 }
 
 const DEFAULT_BOOKMARKS_LOCAL_KEY = 'ao3_folio_local_bookmarks_v1';
+const READING_ROOM_LOCAL_KEY = 'ao3_folio_reading_room_peers_v1';
 const FILTER_PRESETS_KEY = 'ao3_folio_filter_presets_v1';
 const THEME_STORAGE_KEY = 'ao3_folio_theme_v1';
 
@@ -187,8 +209,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('catalog');
   const [activeWorkId, setActiveWorkId] = useState<string | null>(null);
   const [activeChapterIndex, setActiveChapterIndex] = useState<number>(0);
+  const [readerViewMode, setReaderViewMode] = useState<'chapter' | 'entire'>('chapter');
   const [readerFontSize, setReaderFontSize] = useState<'sm' | 'base' | 'lg'>('base');
   const [readerFontFamily, setReaderFontFamily] = useState<'serif' | 'sans'>('serif');
+  const autoFetchedWorkIdsRef = useRef<Set<string>>(new Set());
 
   // Connectivity & Auth state
   const isOnline = useOnlineStatus();
@@ -217,6 +241,32 @@ export default function App() {
   );
   const [cloudWorks, setCloudWorks] = useState<ArchivalWork[]>([]);
 
+  // Hydrate oversized unabridged manuscripts stored in IndexedDB
+  useEffect(() => {
+    let active = true;
+    loadCachedArchivalWorksFromIdb().then((idbWorks) => {
+      if (!active || !idbWorks) return;
+      setArchivalWorks((prev) => {
+        const map = new Map<string, ArchivalWork>();
+        for (const w of prev) map.set(w.id, w);
+        for (const w of idbWorks) {
+          const existing = map.get(w.id);
+          if (
+            !existing ||
+            (w.chapters?.length || 0) > (existing.chapters?.length || 0) ||
+            w.content.length > existing.content.length
+          ) {
+            map.set(w.id, w);
+          }
+        }
+        return Array.from(map.values());
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Listen to public cloud works in Firestore
   useEffect(() => {
     const worksPath = 'works';
@@ -227,9 +277,12 @@ export default function App() {
         const list: ArchivalWork[] = [];
         snap.forEach((docSnap) => {
           const d = docSnap.data();
+          const workTitle = String(d.title || 'Untitled');
+          const rawContent = String(d.content || '');
+          const parsedChapters = splitTextIntoChapters(rawContent, workTitle);
           list.push({
             id: docSnap.id,
-            title: String(d.title || 'Untitled'),
+            title: workTitle,
             authorName: String(d.authorName || 'Anonymous'),
             authorUid: String(d.authorUid || ''),
             fandom: String(d.fandom || 'Original Work'),
@@ -237,11 +290,12 @@ export default function App() {
             category: (d.category as Ao3Category) || 'Gen',
             status: (d.status as Ao3Status) || 'In Progress',
             summary: String(d.summary || ''),
-            content: String(d.content || ''),
+            content: rawContent,
+            chapters: parsedChapters.length > 1 ? parsedChapters : undefined,
             tags: Array.isArray(d.tags) ? d.tags.map(String) : ['General'],
             wordCount: Number(d.wordCount || 0),
-            chapterCount: Number(d.chapterCount || 1),
-            totalChapters: Number(d.totalChapters || 1),
+            chapterCount: Math.max(Number(d.chapterCount || 1), parsedChapters.length),
+            totalChapters: Math.max(Number(d.totalChapters || 1), parsedChapters.length),
             kudosCount: Number(d.kudosCount || 0),
             hitsCount: Number(d.hitsCount || 0),
             bookmarksCount: Number(d.bookmarksCount || 0),
@@ -281,7 +335,12 @@ export default function App() {
   const [localBookmarks, setLocalBookmarks] = useState<BookmarkRecord[]>(() => {
     try {
       const raw = localStorage.getItem(DEFAULT_BOOKMARKS_LOCAL_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw) as BookmarkRecord[];
+        return Array.isArray(parsed)
+          ? parsed.map((b) => ({ ...b, isPublicNote: Boolean(b.isPublicNote) }))
+          : [];
+      }
     } catch {
       // ignore
     }
@@ -300,6 +359,7 @@ export default function App() {
         personalNotes: 'Chapter 2 pathology thermometer reveal is brilliant.',
         userTags: ['Rainy London', 'Case Fic', 'To Re-Read'],
         isFavorite: true,
+        isPublicNote: true,
         updatedAtIso: '2026-11-14',
       },
       {
@@ -316,6 +376,7 @@ export default function App() {
         personalNotes: 'Tracking Celebrimbor and Narvi dialogue notes.',
         userTags: ['Second Age', 'Worldbuilding'],
         isFavorite: false,
+        isPublicNote: false,
         updatedAtIso: '2026-11-12',
       },
     ];
@@ -360,6 +421,7 @@ export default function App() {
             personalNotes: String(d.personalNotes || ''),
             userTags: Array.isArray(d.userTags) ? d.userTags.map(String) : ['Bookmarked'],
             isFavorite: Boolean(d.isFavorite),
+            isPublicNote: Boolean(d.isPublicNote),
             updatedAtIso: formatTimestampIso(d.updatedAt),
             createdAtRaw: d.createdAt,
           });
@@ -374,6 +436,178 @@ export default function App() {
   }, [authReady, user]);
 
   const activeBookmarks = user ? cloudBookmarks : localBookmarks;
+
+  // Reading Room Roster State (Offline Local + Cloud Firestore Sync)
+  const [localPeers, setLocalPeers] = useState<ReadingRoomPeerRecord[]>(() => {
+    try {
+      const raw = localStorage.getItem(READING_ROOM_LOCAL_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+    return INITIAL_READING_ROOM_PEERS;
+  });
+  const [cloudPeers, setCloudPeers] = useState<ReadingRoomPeerRecord[]>([]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(READING_ROOM_LOCAL_KEY, JSON.stringify(localPeers));
+    } catch {
+      // ignore
+    }
+  }, [localPeers]);
+
+  useEffect(() => {
+    if (!authReady || !user) {
+      setCloudPeers([]);
+      return;
+    }
+    const peersPath = 'readingRoomPeers';
+    const q = query(collection(db, peersPath), where('ownerUid', '==', user.uid));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: ReadingRoomPeerRecord[] = [];
+        snap.forEach((docSnap) => {
+          const d = docSnap.data();
+          list.push({
+            id: docSnap.id,
+            ownerUid: String(d.ownerUid),
+            peerCode: String(d.peerCode),
+            peerName: String(d.peerName),
+            role: (d.role as ReadingRoomPeerRecord['role']) || 'Reader',
+            publicKeyFingerprint: String(d.publicKeyFingerprint || ''),
+            sharedFandoms: Array.isArray(d.sharedFandoms)
+              ? d.sharedFandoms.map(String)
+              : ['Original Work'],
+            knownWorkIds: Array.isArray(d.knownWorkIds)
+              ? d.knownWorkIds.map(String)
+              : ['none_yet'],
+            fullCachedInventory: Array.isArray(d.knownWorkIds)
+              ? d.knownWorkIds.map(String)
+              : [],
+            tradeCount: Number(d.tradeCount || 0),
+            status: (d.status as ReadingRoomPeerRecord['status']) || 'Connected',
+            notes: String(d.notes || ''),
+            updatedAtIso: formatTimestampIso(d.updatedAt),
+          });
+        });
+        setCloudPeers(list);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, peersPath);
+      }
+    );
+    return () => unsub();
+  }, [authReady, user]);
+
+  const activePeers = useMemo(() => {
+    if (!user) return localPeers;
+    const map = new Map<string, ReadingRoomPeerRecord>();
+    for (const cp of cloudPeers) map.set(cp.peerCode, cp);
+    return Array.from(map.values());
+  }, [user, localPeers, cloudPeers]);
+
+  const handleUpsertPeer = async (peer: ReadingRoomPeerRecord) => {
+    const cleanCode = sanitizeId(peer.peerCode);
+    setLocalPeers((prev) => {
+      const idx = prev.findIndex((p) => p.peerCode === cleanCode);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...peer, peerCode: cleanCode };
+        return copy;
+      }
+      return [{ ...peer, peerCode: cleanCode }, ...prev];
+    });
+
+    if (!user) return;
+
+    const docId = sanitizeId(`${user.uid}_${cleanCode}`);
+    const peerRef = doc(db, 'readingRoomPeers', docId);
+    const existingCloud = cloudPeers.find((cp) => cp.id === docId);
+
+    try {
+      if (existingCloud) {
+        if (existingCloud.status === 'Archived') {
+          showToast('This Reading Room entry is Archived and locked.');
+          return;
+        }
+        await updateDoc(peerRef, {
+          peerName: clampString(peer.peerName, 1, 80),
+          role: peer.role,
+          publicKeyFingerprint: clampString(peer.publicKeyFingerprint, 4, 128),
+          sharedFandoms: sanitizeTagsList(peer.sharedFandoms, 'Original Work'),
+          knownWorkIds: sanitizeTagsList(peer.knownWorkIds, 'none_yet'),
+          tradeCount: Math.max(0, Math.min(100000, peer.tradeCount)),
+          status: peer.status,
+          notes: clampString(peer.notes, 0, 500, ''),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(peerRef, {
+          ownerUid: user.uid,
+          peerCode: cleanCode,
+          peerName: clampString(peer.peerName, 1, 80),
+          role: peer.role,
+          publicKeyFingerprint: clampString(peer.publicKeyFingerprint, 4, 128),
+          sharedFandoms: sanitizeTagsList(peer.sharedFandoms, 'Original Work'),
+          knownWorkIds: sanitizeTagsList(peer.knownWorkIds, 'none_yet'),
+          tradeCount: Math.max(0, Math.min(100000, peer.tradeCount)),
+          status: peer.status,
+          notes: clampString(peer.notes, 0, 500, ''),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        existingCloud ? OperationType.UPDATE : OperationType.CREATE,
+        `readingRoomPeers/${docId}`
+      );
+    }
+  };
+
+  const handleDeletePeer = async (peer: ReadingRoomPeerRecord) => {
+    setLocalPeers((prev) => prev.filter((p) => p.peerCode !== peer.peerCode));
+    if (!user) {
+      showToast(`Removed "${peer.peerName}" from Reading Room`);
+      return;
+    }
+    const path = `readingRoomPeers/${peer.id}`;
+    try {
+      await deleteDoc(doc(db, 'readingRoomPeers', peer.id));
+      showToast(`Removed "${peer.peerName}" from Cloud Reading Room`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  };
+
+  const handleImportWorksFromTrade = (result: TradeImportResult) => {
+    setArchivalWorks((prev) => {
+      const map = new Map<string, ArchivalWork>();
+      for (const w of prev) map.set(w.id, w);
+      for (const incomingWork of result.importedWorks) {
+        const existing = map.get(incomingWork.id);
+        if (!existing) {
+          map.set(incomingWork.id, incomingWork);
+        } else {
+          const mergedAnnotations = mergeSharedAnnotations(
+            existing.sharedAnnotations,
+            incomingWork.sharedAnnotations
+          );
+          const takeIncomingText =
+            incomingWork.chapterCount > existing.chapterCount ||
+            incomingWork.wordCount > existing.wordCount;
+          map.set(incomingWork.id, {
+            ...(takeIncomingText ? incomingWork : existing),
+            sharedAnnotations: mergedAnnotations,
+          });
+        }
+      }
+      return Array.from(map.values());
+    });
+  };
 
   // Offline Tag Filtering State
   const [searchQuery, setSearchQuery] = useState('');
@@ -586,6 +820,9 @@ export default function App() {
       'Bookmarked'
     );
     const isFavorite = overrides?.isFavorite ?? existingBm?.isFavorite ?? false;
+    const isPublicNote = Boolean(
+      overrides?.isPublicNote ?? existingBm?.isPublicNote ?? false
+    );
 
     if (!user) {
       const localId = existingBm?.id || `local_${slug}`;
@@ -603,6 +840,7 @@ export default function App() {
         personalNotes,
         userTags,
         isFavorite,
+        isPublicNote,
         updatedAtIso: new Date().toISOString().slice(0, 10),
       };
       setLocalBookmarks((prev) => {
@@ -634,6 +872,7 @@ export default function App() {
           personalNotes,
           userTags,
           isFavorite,
+          isPublicNote,
           ficTitle: clampString(work.title, 1, 200),
           ficAuthor: clampString(work.authorName, 1, 100),
           ficFandom: clampString(work.fandom, 1, 150),
@@ -653,6 +892,7 @@ export default function App() {
           personalNotes,
           userTags,
           isFavorite,
+          isPublicNote,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -707,6 +947,7 @@ export default function App() {
             personalNotes: clampString(lb.personalNotes, 0, 1000, ''),
             userTags: sanitizeTagsList(lb.userTags, 'Bookmarked'),
             isFavorite: Boolean(lb.isFavorite),
+            isPublicNote: Boolean(lb.isPublicNote),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -1196,12 +1437,108 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
     showToast(`Left Kudos on "${work.title}"`);
   };
 
-  // Internet Archive Live Scraper State
+  // Internet Archive Live Scraper & AO3 Importer State
   const [scraperQuery, setScraperQuery] = useState<string>('Sherlock OR Tolkien OR Star Trek');
   const [isScraping, setIsScraping] = useState<boolean>(false);
   const [scrapedResults, setScrapedResults] = useState<ArchivalWork[]>([]);
   const [scraperSourceLabel, setScraperSourceLabel] = useState<string>('Ready to query archive.org');
   const [loadingFullTextId, setLoadingFullTextId] = useState<string | null>(null);
+
+  const [ao3UrlInput, setAo3UrlInput] = useState<string>('');
+  const [isRecoveringAo3, setIsRecoveringAo3] = useState<boolean>(false);
+  const [isImportingFiles, setIsImportingFiles] = useState<boolean>(false);
+  const [isDraggingAo3File, setIsDraggingAo3File] = useState<boolean>(false);
+  const [showPasteHtmlBox, setShowPasteHtmlBox] = useState<boolean>(false);
+  const [pastedAo3Html, setPastedAo3Html] = useState<string>('');
+  const [ao3ImportNotice, setAo3ImportNotice] = useState<string | null>(null);
+
+  const mergeImportedWorksIntoLibrary = (works: ArchivalWork[]) => {
+    setArchivalWorks((prev) => {
+      const map = new Map<string, ArchivalWork>();
+      for (const w of prev) map.set(w.id, w);
+      for (const w of works) map.set(w.id, w);
+      return Array.from(map.values());
+    });
+    setScrapedResults((prev) => {
+      const map = new Map<string, ArchivalWork>();
+      for (const w of works) map.set(w.id, w);
+      for (const w of prev) {
+        if (!map.has(w.id)) map.set(w.id, w);
+      }
+      return Array.from(map.values());
+    });
+  };
+
+  const handleAo3FilesSelected = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setIsImportingFiles(true);
+    setAo3ImportNotice(null);
+    try {
+      const files = Array.from(fileList);
+      const imported: ArchivalWork[] = [];
+      for (const f of files) {
+        const work = await parseUploadedAo3File(f);
+        imported.push(work);
+      }
+      if (imported.length > 0) {
+        mergeImportedWorksIntoLibrary(imported);
+        const totalWords = imported.reduce((acc, w) => acc + w.wordCount, 0);
+        const totalChapters = imported.reduce((acc, w) => acc + w.chapterCount, 0);
+        const msg = `Imported ${imported.length} unabridged ${
+          imported.length === 1 ? 'work' : 'works'
+        } (${totalChapters} ch · ${totalWords.toLocaleString()} words) into offline cache.`;
+        setAo3ImportNotice(msg);
+        showToast(msg);
+        if (imported.length === 1) {
+          setActiveChapterIndex(0);
+          setActiveWorkId(imported[0].id);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to parse AO3 file';
+      setAo3ImportNotice(msg);
+      showToast(msg);
+    } finally {
+      setIsImportingFiles(false);
+    }
+  };
+
+  const handleRecoverAo3Wayback = async () => {
+    if (!ao3UrlInput.trim()) return;
+    setIsRecoveringAo3(true);
+    setAo3ImportNotice(null);
+    try {
+      const result = await recoverAo3WorkFromWayback(ao3UrlInput);
+      mergeImportedWorksIntoLibrary([result.work]);
+      const msg = `Recovered "${result.work.title}" (${result.work.wordCount.toLocaleString()} words · ${result.work.chapterCount} chapters) from Wayback snapshot ${result.snapshotDate}.`;
+      setAo3ImportNotice(msg);
+      showToast(msg);
+      setActiveChapterIndex(0);
+      setActiveWorkId(result.work.id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not recover AO3 work from Wayback';
+      setAo3ImportNotice(msg);
+      showToast(msg);
+    } finally {
+      setIsRecoveringAo3(false);
+    }
+  };
+
+  const handleParsePastedAo3Html = () => {
+    if (!pastedAo3Html.trim() || pastedAo3Html.trim().length < 100) {
+      showToast('Paste the full AO3 page HTML source first.');
+      return;
+    }
+    const work = parseAo3HtmlToWork(pastedAo3Html, 'Pasted AO3 Work');
+    mergeImportedWorksIntoLibrary([work]);
+    setPastedAo3Html('');
+    setShowPasteHtmlBox(false);
+    showToast(
+      `Parsed "${work.title}" (${work.wordCount.toLocaleString()} words · ${work.chapterCount} ch)`
+    );
+    setActiveChapterIndex(0);
+    setActiveWorkId(work.id);
+  };
 
   const handleRunScraper = async (customQuery?: string) => {
     const q = customQuery !== undefined ? customQuery : scraperQuery;
@@ -1224,24 +1561,44 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
   };
 
   const handleFetchFullTextFromIa = async (work: ArchivalWork) => {
+    if (!isRealArchiveOrgIdentifier(work.sourceArchiveId)) {
+      showToast('Full pre-indexed manuscript is already stored locally offline.');
+      return;
+    }
     setLoadingFullTextId(work.id);
     try {
-      const { extractedText } = await fetchInternetArchiveItemText(work.sourceArchiveId);
+      const { extractedText, fileFormat, isTruncated } = await fetchInternetArchiveItemText(
+        work.sourceArchiveId
+      );
       if (extractedText && extractedText.trim().length > 100) {
+        const parsedChapters = splitTextIntoChapters(extractedText, work.title);
+        const parsedWordCount = countWords(extractedText);
         setArchivalWorks((prev) =>
           prev.map((w) =>
             w.id === work.id
               ? {
                   ...w,
+                  chapters: parsedChapters,
                   content: extractedText,
-                  wordCount: countWords(extractedText),
+                  wordCount: parsedWordCount,
+                  chapterCount: parsedChapters.length,
+                  totalChapters: Math.max(w.totalChapters || 0, parsedChapters.length),
                 }
               : w
           )
         );
-        showToast(`Streamed full archival text (${countWords(extractedText).toLocaleString()} words) from archive.org`);
+        setActiveChapterIndex((prevIdx) =>
+          Math.min(prevIdx, Math.max(0, parsedChapters.length - 1))
+        );
+        const formatTag = fileFormat ? ` (${fileFormat})` : '';
+        const capNotice = isTruncated ? ' [12 MB stream limit reached]' : '';
+        showToast(
+          `Loaded unabridged${formatTag} text: ${parsedWordCount.toLocaleString()} words across ${
+            parsedChapters.length
+          } ${parsedChapters.length === 1 ? 'chapter' : 'chapters'}${capNotice}`
+        );
       } else {
-        showToast('Archival metadata loaded; full text stream preserved in summary view.');
+        showToast('No plain text/HTML/EPUB manuscript stream available for this archive.org item.');
       }
     } catch {
       showToast('Using local offline cached manuscript text.');
@@ -1253,6 +1610,34 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
   const activeWork = useMemo(
     () => allWorks.find((w) => w.id === activeWorkId) || null,
     [allWorks, activeWorkId]
+  );
+
+  // Automatically fetch full text when a user opens a newly scraped Internet Archive item
+  useEffect(() => {
+    if (!activeWork) return;
+    if (!isRealArchiveOrgIdentifier(activeWork.sourceArchiveId)) return;
+    if (!isArchivalPlaceholderContent(activeWork.content)) return;
+    if (autoFetchedWorkIdsRef.current.has(activeWork.id)) return;
+    autoFetchedWorkIdsRef.current.add(activeWork.id);
+    void handleFetchFullTextFromIa(activeWork);
+  }, [activeWork]);
+
+  const activeChapters = useMemo(
+    () => (activeWork?.chapters && activeWork.chapters.length > 0 ? activeWork.chapters : null),
+    [activeWork]
+  );
+
+  const safeChapterIndex = activeChapters
+    ? Math.min(activeChapterIndex, activeChapters.length - 1)
+    : 0;
+  const activeChapter = activeChapters ? activeChapters[safeChapterIndex] : null;
+
+  const activeWorkBookmark = useMemo(
+    () =>
+      activeWork
+        ? activeBookmarks.find((b) => b.ficSlug === sanitizeId(activeWork.id)) || null
+        : null,
+    [activeWork, activeBookmarks]
   );
 
   // Compute aggregated Feedback Analytics for Author Studio
@@ -1287,7 +1672,7 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
 
       {/* Top Bar Contract: Strict 1-row, 3-zone header separated by gap-8 */}
       <header className="sticky top-0 z-40 flex items-center justify-between gap-8 px-6 lg:px-12 py-4 border-b border-stone-200 dark:border-zinc-800/90 bg-[#FBF9F5]/95 dark:bg-[#0C0C0E]/95 backdrop-blur-xs">
-        {/* Zone 1: Single text element wordmark */}
+        {/* Zone 1: Reading Owl Medallion + Single-line Archive Mine Own Wordmark */}
         <a
           href="#catalog"
           onClick={(e) => {
@@ -1295,9 +1680,14 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
             setActiveWorkId(null);
             setActiveTab('catalog');
           }}
-          className="text-2xl font-serif-editorial font-semibold tracking-tight text-stone-900 dark:text-zinc-100 whitespace-nowrap shrink-0"
+          className="flex items-center gap-3 text-2xl font-serif-editorial font-semibold tracking-tight text-stone-900 dark:text-zinc-100 whitespace-nowrap shrink-0"
         >
-          Archive of Our Own
+          <img
+            src="/reading-owl-mascot.png"
+            alt="The Reading Owl — 1600s Dutch Mascot"
+            className="w-8 h-8 rounded-full border border-amber-500/40 object-cover shrink-0"
+          />
+          <span>Archive Mine Own</span>
         </a>
 
         {/* Zone 2: 4 concise single-line navigation links */}
@@ -1344,6 +1734,19 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
           <button
             onClick={() => {
               setActiveWorkId(null);
+              setActiveTab('readingRoom');
+            }}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeTab === 'readingRoom' && !activeWorkId
+                ? 'border-[#E11D48] text-stone-900 dark:text-white'
+                : 'border-transparent hover:text-stone-900 dark:hover:text-zinc-100'
+            }`}
+          >
+            Reading Room
+          </button>
+          <button
+            onClick={() => {
+              setActiveWorkId(null);
               setActiveTab('scraper');
             }}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
@@ -1386,6 +1789,7 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
             { id: 'catalog', label: 'Catalog' },
             { id: 'dashboard', label: 'Dashboard' },
             { id: 'studio', label: 'Author Studio' },
+            { id: 'readingRoom', label: 'Reading Room' },
             { id: 'scraper', label: 'IA Scraper' },
           ] as const
         ).map((item) => (
@@ -1504,7 +1908,33 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                   ))}
                 </div>
 
-                {activeWork.sourceArchiveId !== 'original' && (
+                {/* Reading Mode Toggle (Chapter by Chapter vs Entire Work) */}
+                {activeChapters && activeChapters.length > 1 && (
+                  <div className="flex items-center gap-1 rounded border border-stone-200 dark:border-zinc-800 p-1 bg-white/50 dark:bg-zinc-900/60">
+                    <button
+                      onClick={() => setReaderViewMode('chapter')}
+                      className={`px-2.5 py-1 text-xs rounded transition-colors cursor-pointer ${
+                        readerViewMode === 'chapter'
+                          ? 'bg-stone-900 text-white dark:bg-zinc-100 dark:text-zinc-900 font-medium'
+                          : 'text-stone-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      Chapter by Chapter
+                    </button>
+                    <button
+                      onClick={() => setReaderViewMode('entire')}
+                      className={`px-2.5 py-1 text-xs rounded transition-colors cursor-pointer ${
+                        readerViewMode === 'entire'
+                          ? 'bg-[#E11D48] text-white font-medium'
+                          : 'text-stone-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      Entire Work ({activeChapters.length})
+                    </button>
+                  </div>
+                )}
+
+                {isRealArchiveOrgIdentifier(activeWork.sourceArchiveId) && (
                   <button
                     onClick={() => handleFetchFullTextFromIa(activeWork)}
                     disabled={loadingFullTextId === activeWork.id}
@@ -1515,7 +1945,11 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                         loadingFullTextId === activeWork.id ? 'animate-spin' : ''
                       }`}
                     />
-                    <span>Stream Full Text (archive.org)</span>
+                    <span>
+                      {loadingFullTextId === activeWork.id
+                        ? 'Streaming Full Text...'
+                        : 'Stream Full Text (archive.org)'}
+                    </span>
                   </button>
                 )}
 
@@ -1530,15 +1964,21 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                 <button
                   onClick={() =>
                     handleUpsertBookmark(activeWork, {
-                      currentChapter: activeChapterIndex + 1,
-                      progressPercent: Math.min(
-                        100,
-                        Math.round(
-                          ((activeChapterIndex + 1) /
-                            Math.max(1, activeWork.chapters?.length || activeWork.chapterCount)) *
-                            100
-                        )
-                      ),
+                      currentChapter:
+                        readerViewMode === 'entire' && activeChapters
+                          ? activeChapters.length
+                          : safeChapterIndex + 1,
+                      progressPercent:
+                        readerViewMode === 'entire'
+                          ? 100
+                          : Math.min(
+                              100,
+                              Math.round(
+                                ((safeChapterIndex + 1) /
+                                  Math.max(1, activeChapters?.length || activeWork.chapterCount)) *
+                                  100
+                              )
+                            ),
                     })
                   }
                   className="flex items-center gap-1.5 rounded bg-[#E11D48] px-3.5 py-1.5 text-xs font-medium text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
@@ -1602,67 +2042,267 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                   </div>
                 </div>
 
-                {/* Chapter Navigation Switcher if multi-chapter */}
-                {activeWork.chapters && activeWork.chapters.length > 1 && (
+                {/* Live Streaming Notice while retrieving unabridged archive.org manuscript */}
+                {loadingFullTextId === activeWork.id && (
+                  <div className="max-w-2xl flex items-center gap-3 rounded border border-stone-300 dark:border-zinc-700 bg-white/70 dark:bg-zinc-900/70 px-4 py-3 text-xs text-stone-700 dark:text-zinc-300">
+                    <RefreshCw className="w-4 h-4 text-[#E11D48] animate-spin shrink-0" />
+                    <span>
+                      Streaming unabridged archival manuscript (HTML / Text / EPUB) from archive.org into offline cache...
+                    </span>
+                  </div>
+                )}
+
+                {/* Chapter Navigation Switcher if multi-chapter in chapter mode */}
+                {activeChapters && activeChapters.length > 1 && readerViewMode === 'chapter' && (
                   <div className="flex flex-wrap items-center justify-between gap-4 py-3 border-b border-stone-200 dark:border-zinc-800">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {activeWork.chapters.map((ch, idx) => (
-                        <button
-                          key={ch.number}
-                          onClick={() => {
+                    {activeChapters.length <= 12 ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {activeChapters.map((ch, idx) => (
+                          <button
+                            key={ch.number}
+                            onClick={() => {
+                              setActiveChapterIndex(idx);
+                              handleUpsertBookmark(activeWork, {
+                                currentChapter: idx + 1,
+                                progressPercent: Math.round(
+                                  ((idx + 1) / activeChapters.length) * 100
+                                ),
+                              });
+                            }}
+                            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors cursor-pointer ${
+                              safeChapterIndex === idx
+                                ? 'bg-[#E11D48] text-white'
+                                : 'bg-stone-200/70 dark:bg-zinc-800/80 text-stone-700 dark:text-zinc-300 hover:bg-stone-300 dark:hover:bg-zinc-700'
+                            }`}
+                          >
+                            {ch.title}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-3 w-full">
+                        <label className="text-xs font-medium text-stone-600 dark:text-zinc-400">
+                          Jump to Chapter ({activeChapters.length} total):
+                        </label>
+                        <select
+                          value={safeChapterIndex}
+                          onChange={(e) => {
+                            const idx = Number(e.target.value);
                             setActiveChapterIndex(idx);
                             handleUpsertBookmark(activeWork, {
                               currentChapter: idx + 1,
                               progressPercent: Math.round(
-                                ((idx + 1) / activeWork.chapters!.length) * 100
+                                ((idx + 1) / activeChapters.length) * 100
                               ),
                             });
                           }}
-                          className={`px-3 py-1.5 text-xs font-medium rounded transition-colors cursor-pointer ${
-                            activeChapterIndex === idx
-                              ? 'bg-[#E11D48] text-white'
-                              : 'bg-stone-200/70 dark:bg-zinc-800/80 text-stone-700 dark:text-zinc-300 hover:bg-stone-300 dark:hover:bg-zinc-700'
-                          }`}
+                          className="rounded border border-stone-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-xs text-stone-900 dark:text-zinc-100 max-w-xs"
                         >
-                          {ch.title}
-                        </button>
-                      ))}
-                    </div>
+                          {activeChapters.map((ch, idx) => (
+                            <option key={ch.number} value={idx}>
+                              {idx + 1}. {ch.title} ({ch.wordCount.toLocaleString()} words)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* Main Prose Body constrained to comfortable 65-72ch reading measure */}
-                <div
-                  className={`max-w-2xl space-y-6 leading-relaxed text-stone-800 dark:text-zinc-200 ${
-                    readerFontFamily === 'serif' ? 'font-serif-editorial' : 'font-sans'
-                  } ${
-                    readerFontSize === 'sm'
-                      ? 'text-base leading-relaxed'
-                      : readerFontSize === 'base'
-                      ? 'text-lg leading-loose'
-                      : 'text-xl leading-loose'
-                  }`}
-                >
-                  {(
-                    activeWork.chapters?.[activeChapterIndex]?.content || activeWork.content
-                  )
-                    .split('\n\n')
-                    .map((para, pIdx) => (
-                      <p
-                        key={pIdx}
+                {readerViewMode === 'entire' && activeChapters && activeChapters.length > 1 ? (
+                  /* ==================== ENTIRE WORK CONTINUOUS READER ==================== */
+                  <div className="space-y-14">
+                    {activeChapters.map((ch, chIdx) => (
+                      <section
+                        key={ch.number}
                         className={
-                          pIdx === 0
-                            ? 'first-letter:text-5xl first-letter:font-serif-editorial first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:text-[#E11D48]'
-                            : ''
+                          chIdx > 0
+                            ? 'pt-10 border-t border-stone-200 dark:border-zinc-800 space-y-6'
+                            : 'space-y-6'
                         }
                       >
-                        {para}
-                      </p>
+                        <div className="max-w-2xl space-y-2">
+                          <div className="text-xs font-mono-tabular uppercase tracking-wider text-stone-500 dark:text-zinc-400">
+                            Chapter {chIdx + 1} of {activeChapters.length} ·{' '}
+                            {ch.wordCount.toLocaleString()} words
+                          </div>
+                          <h2 className="text-2xl font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
+                            {ch.title}
+                          </h2>
+                          {ch.notes && (
+                            <p className="text-xs italic text-stone-600 dark:text-zinc-400 leading-relaxed pt-1 pb-2 border-b border-stone-200/60 dark:border-zinc-800/60">
+                              {ch.notes}
+                            </p>
+                          )}
+                        </div>
+
+                        <div
+                          className={`max-w-2xl space-y-6 leading-relaxed text-stone-800 dark:text-zinc-200 ${
+                            readerFontFamily === 'serif' ? 'font-serif-editorial' : 'font-sans'
+                          } ${
+                            readerFontSize === 'sm'
+                              ? 'text-base leading-relaxed'
+                              : readerFontSize === 'base'
+                              ? 'text-lg leading-loose'
+                              : 'text-xl leading-loose'
+                          }`}
+                        >
+                          {ch.content.split('\n\n').map((para, pIdx) => (
+                            <p
+                              key={pIdx}
+                              className={
+                                pIdx === 0
+                                  ? 'first-letter:text-5xl first-letter:font-serif-editorial first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:text-[#E11D48]'
+                                  : ''
+                              }
+                            >
+                              {para}
+                            </p>
+                          ))}
+                        </div>
+                      </section>
                     ))}
-                </div>
+                  </div>
+                ) : (
+                  /* ==================== CHAPTER-BY-CHAPTER READER ==================== */
+                  <>
+                    {/* Active Chapter Heading & Author Notes */}
+                    {activeChapter && (
+                      <div className="max-w-2xl space-y-2 pt-1">
+                        <div className="text-xs font-mono-tabular uppercase tracking-wider text-stone-500 dark:text-zinc-400">
+                          Chapter {safeChapterIndex + 1} of {activeChapters!.length}
+                        </div>
+                        <h2 className="text-2xl font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
+                          {activeChapter.title}
+                        </h2>
+                        {activeChapter.notes && (
+                          <p className="text-xs italic text-stone-600 dark:text-zinc-400 leading-relaxed pt-1 pb-2 border-b border-stone-200/60 dark:border-zinc-800/60">
+                            {activeChapter.notes}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Main Prose Body constrained to comfortable 65-72ch reading measure */}
+                    <div
+                      className={`max-w-2xl space-y-6 leading-relaxed text-stone-800 dark:text-zinc-200 ${
+                        readerFontFamily === 'serif' ? 'font-serif-editorial' : 'font-sans'
+                      } ${
+                        readerFontSize === 'sm'
+                          ? 'text-base leading-relaxed'
+                          : readerFontSize === 'base'
+                          ? 'text-lg leading-loose'
+                          : 'text-xl leading-loose'
+                      }`}
+                    >
+                      {(activeChapter?.content || activeWork.content)
+                        .split('\n\n')
+                        .map((para, pIdx) => (
+                          <p
+                            key={pIdx}
+                            className={
+                              pIdx === 0
+                                ? 'first-letter:text-5xl first-letter:font-serif-editorial first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:text-[#E11D48]'
+                                : ''
+                            }
+                          >
+                            {para}
+                          </p>
+                        ))}
+                    </div>
+
+                    {/* Bottom Previous / Next Chapter Pagination Controls */}
+                    {activeChapters && activeChapters.length > 1 && (
+                      <div className="max-w-2xl pt-8 mt-8 border-t border-stone-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-4">
+                        <button
+                          onClick={() => {
+                            const prevIdx = Math.max(0, safeChapterIndex - 1);
+                            setActiveChapterIndex(prevIdx);
+                            handleUpsertBookmark(activeWork, {
+                              currentChapter: prevIdx + 1,
+                              progressPercent: Math.round(
+                                ((prevIdx + 1) / activeChapters.length) * 100
+                              ),
+                            });
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          disabled={safeChapterIndex === 0}
+                          className="flex items-center gap-1.5 rounded border border-stone-300 dark:border-zinc-700 px-3.5 py-2 text-xs font-medium text-stone-700 dark:text-zinc-300 hover:border-[#E11D48] hover:text-[#E11D48] disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                          <span>Previous Chapter</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setReaderViewMode('entire');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="text-xs font-mono-tabular text-stone-500 dark:text-zinc-400 hover:text-[#E11D48] transition-colors cursor-pointer"
+                        >
+                          Chapter {safeChapterIndex + 1} / {activeChapters.length} · View Entire Work
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            const nextIdx = Math.min(activeChapters.length - 1, safeChapterIndex + 1);
+                            setActiveChapterIndex(nextIdx);
+                            handleUpsertBookmark(activeWork, {
+                              currentChapter: nextIdx + 1,
+                              progressPercent: Math.round(
+                                ((nextIdx + 1) / activeChapters.length) * 100
+                              ),
+                            });
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          disabled={safeChapterIndex >= activeChapters.length - 1}
+                          className="flex items-center gap-1.5 rounded bg-[#E11D48] px-4 py-2 text-xs font-medium text-white hover:bg-[#BE123C] disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
+                        >
+                          <span>Next Chapter</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+                {/* Reading Room Marginalia & Public Bookmark Notes (Appended on Traded Editions) */}
+                {activeWork.sharedAnnotations && activeWork.sharedAnnotations.length > 0 && (
+                  <section className="max-w-2xl pt-8 mt-8 border-t border-stone-200 dark:border-zinc-800 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <Feather className="w-4 h-4 text-[#E11D48]" />
+                      <h3 className="text-lg font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
+                        Reading Room Marginalia &amp; Public Bookmark Notes ({activeWork.sharedAnnotations.length})
+                      </h3>
+                    </div>
+                    <div className="divide-y divide-stone-200/80 dark:divide-zinc-800/80 rounded-lg border border-stone-200 dark:border-zinc-800 bg-white/40 dark:bg-[#121216] px-5">
+                      {activeWork.sharedAnnotations.map((ann, idx) => (
+                        <div key={`${ann.readerFingerprint}-${idx}`} className="py-4 space-y-1.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500 dark:text-zinc-400">
+                            <span className="font-medium text-stone-900 dark:text-zinc-100">
+                              {ann.readerName}
+                            </span>
+                            <span className="font-mono-tabular">
+                              {ann.readerFingerprint} · {ann.readingStatus} · {ann.annotatedAtIso}
+                            </span>
+                          </div>
+                          {ann.note && (
+                            <p className="text-sm italic text-stone-700 dark:text-zinc-200 leading-relaxed">
+                              “{ann.note}”
+                            </p>
+                          )}
+                          {ann.userTags.length > 0 && (
+                            <p className="text-xs text-stone-500 dark:text-zinc-400">
+                              Bookmark Tags: {ann.userTags.join(' · ')}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
               </article>
 
-              {/* Right Margin Rail: Provenance & Direct Reader Feedback */}
+              {/* Right Margin Rail: Provenance, Public Bookmark Notes & Direct Reader Feedback */}
               <aside className="lg:col-span-4 space-y-6 lg:sticky lg:top-24">
                 {/* Accession Metadata Box */}
                 <div className="rounded-lg border border-stone-200 dark:border-zinc-800 bg-white/60 dark:bg-[#121216] p-5 space-y-4">
@@ -1696,6 +2336,69 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                       </dd>
                     </div>
                   </dl>
+                </div>
+
+                {/* Personal Bookmark Note & Public Reading Room Edition Toggle */}
+                <div className="rounded-lg border border-stone-200 dark:border-zinc-800 bg-white/60 dark:bg-[#121216] p-5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-base font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
+                      <Feather className="w-4 h-4 text-[#E11D48]" />
+                      <span>Bookmark Marginalia Note</span>
+                    </h3>
+                    {activeWorkBookmark?.isPublicNote && (
+                      <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                        <Globe className="w-3 h-3" />
+                        <span>Public</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed">
+                    Annotate this work on your bookmark. Mark it public to append your note when trading copies in the Reading Room.
+                  </p>
+                  <textarea
+                    rows={2}
+                    key={`${activeWork.id}-${activeWorkBookmark?.personalNotes || ''}`}
+                    defaultValue={activeWorkBookmark?.personalNotes || ''}
+                    disabled={activeWorkBookmark?.readingStatus === 'Archived'}
+                    onBlur={(e) => {
+                      const val = e.target.value;
+                      if (val !== (activeWorkBookmark?.personalNotes || '')) {
+                        void handleUpsertBookmark(activeWork, {
+                          personalNotes: val,
+                          currentChapter: safeChapterIndex + 1,
+                        });
+                      }
+                    }}
+                    placeholder="Write a margin note or favorite quote (saves on blur)..."
+                    className="w-full rounded border border-stone-300 dark:border-zinc-700 bg-[#FBF9F5] dark:bg-zinc-900 px-3 py-2 text-xs text-stone-900 dark:text-zinc-100"
+                  />
+                  <button
+                    type="button"
+                    disabled={activeWorkBookmark?.readingStatus === 'Archived'}
+                    onClick={() =>
+                      handleUpsertBookmark(activeWork, {
+                        isPublicNote: !(activeWorkBookmark?.isPublicNote ?? false),
+                        currentChapter: safeChapterIndex + 1,
+                      })
+                    }
+                    className={`w-full flex items-center justify-center gap-2 rounded border py-1.5 px-3 text-xs font-medium transition-colors cursor-pointer disabled:opacity-40 ${
+                      activeWorkBookmark?.isPublicNote
+                        ? 'border-emerald-600/60 bg-emerald-950/20 text-emerald-700 dark:text-emerald-400'
+                        : 'border-stone-300 dark:border-zinc-700 text-stone-700 dark:text-zinc-300 hover:border-[#E11D48]'
+                    }`}
+                  >
+                    {activeWorkBookmark?.isPublicNote ? (
+                      <>
+                        <Globe className="w-3.5 h-3.5" />
+                        <span>Public in Reading Room (Click to Make Private)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Private Note (Click to Append in Reading Room)</span>
+                      </>
+                    )}
+                  </button>
                 </div>
 
                 {/* Direct Reader Feedback Submission Box */}
@@ -1807,21 +2510,29 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
             {/* ==================== 1. ARCHIVE CATALOG & OFFLINE TAG FILTERING ==================== */}
             {activeTab === 'catalog' && (
               <div className="space-y-10">
-                {/* Editorial Hero Banner */}
+                {/* Editorial Hero Banner with Dutch 1600s Reading Owl Mascot */}
                 <section className="pb-8 border-b border-stone-200 dark:border-zinc-800">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-end">
-                    <div className="lg:col-span-8 space-y-3">
-                      <p className="text-xs uppercase tracking-widest text-[#E11D48] font-medium">
-                        Organization for Transformative Works · Modern Archival Edition
-                      </p>
-                      <h1 className="text-4xl lg:text-5xl font-serif-editorial font-semibold tracking-tight text-stone-900 dark:text-zinc-50 text-balance">
-                        Curated Transformative Works & Offline Tag Index
-                      </h1>
-                      <p className="text-sm lg:text-base text-stone-600 dark:text-zinc-400 max-w-2xl leading-relaxed">
-                        Browse historical fanworks preserved via the Internet Archive alongside community cloud manuscripts. Filter instantaneously across canonical relationships, ratings, and tropes with full offline capability.
-                      </p>
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                    <div className="lg:col-span-8 flex flex-col sm:flex-row sm:items-center gap-6">
+                      <img
+                        src="/reading-owl-mascot.png"
+                        alt="1600s Dutch Drawing of The Reading Owl — Mascot of Archive Mine Own"
+                        className="w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-amber-500/40 object-cover shrink-0 shadow-lg"
+                      />
+                      <div className="space-y-2.5">
+                        <p className="text-xs uppercase tracking-widest text-[#E11D48] font-medium">
+                          Archive Mine Own · space, time, and resources to create
+                        </p>
+                        <h1 className="text-4xl lg:text-5xl font-serif-editorial font-semibold tracking-tight text-stone-900 dark:text-zinc-50 text-balance">
+                          Personal Transformative Works &amp; Offline Tag Index
+                        </h1>
+                        <p className="text-sm lg:text-base text-stone-600 dark:text-zinc-400 max-w-2xl leading-relaxed">
+                          Preserve stories locally, filter offline across canonical tropes, and trade unique signed Reading Room editions stamped with your public bookmark notes.
+                        </p>
+                      </div>
                     </div>
                     <div className="lg:col-span-4 flex flex-wrap lg:justify-end gap-3">
+                      <PWAInstallButton variant="prominent" />
                       <button
                         onClick={() => handleRunScraper('')}
                         disabled={isScraping}
@@ -1829,12 +2540,12 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                       >
                         <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
                         <span>
-                          {isScraping ? 'Scraping archive.org...' : 'Sync Internet Archive AO3'}
+                          {isScraping ? 'Scraping archive.org...' : 'Sync Internet Archive'}
                         </span>
                       </button>
                       <button
                         onClick={() => setActiveTab('studio')}
-                        className="flex items-center gap-2 rounded bg-[#E11D48] px-4 py-2 text-xs font-medium text-white hover:bg-[#BE123C] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="flex items-center gap-2 rounded border border-stone-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-stone-800 dark:text-zinc-200 hover:border-[#E11D48] hover:text-[#E11D48] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <PenTool className="w-3.5 h-3.5" />
                         <span>New Manuscript</span>
@@ -2187,6 +2898,14 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                                   <span>Bookmarks: {work.bookmarksCount.toLocaleString()}</span>
                                   <span aria-hidden="true">·</span>
                                   <span>Hits: {work.hitsCount.toLocaleString()}</span>
+                                  {work.sharedAnnotations && work.sharedAnnotations.length > 0 && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span className="text-[#E11D48] font-medium">
+                                        Marginalia Notes: {work.sharedAnnotations.length}
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
 
                                 <div className="flex items-center gap-3">
@@ -2476,8 +3195,8 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                             </div>
                           </div>
 
-                          {/* Personal Reading Notes */}
-                          <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                          {/* Personal Reading Notes + Public Reading Room Sharing Toggle */}
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 pt-1">
                             <input
                               type="text"
                               disabled={isLocked}
@@ -2489,9 +3208,36 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                                   });
                                 }
                               }}
-                              placeholder="Add private bookmark notes or favorite quotes (auto-syncs on blur)..."
+                              placeholder="Add bookmark notes or favorite quotes (auto-syncs on blur)..."
                               className="flex-1 rounded border border-stone-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-3 py-1.5 text-xs text-stone-800 dark:text-zinc-200"
                             />
+                            <button
+                              type="button"
+                              disabled={isLocked}
+                              onClick={() =>
+                                handleUpsertBookmark(matchedWork, {
+                                  isPublicNote: !bm.isPublicNote,
+                                })
+                              }
+                              title="When public, this note is appended to your traded Reading Room copies"
+                              className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer disabled:opacity-40 ${
+                                bm.isPublicNote
+                                  ? 'border-emerald-600/60 bg-emerald-950/20 text-emerald-700 dark:text-emerald-400'
+                                  : 'border-stone-300 dark:border-zinc-700 text-stone-600 dark:text-zinc-400 hover:border-[#E11D48]'
+                              }`}
+                            >
+                              {bm.isPublicNote ? (
+                                <>
+                                  <Globe className="w-3.5 h-3.5" />
+                                  <span>Public Note (Reading Room)</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="w-3.5 h-3.5" />
+                                  <span>Private Note</span>
+                                </>
+                              )}
+                            </button>
                           </div>
                         </div>
                       );
@@ -2833,19 +3579,19 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
               </div>
             )}
 
-            {/* ==================== 4. INTERNET ARCHIVE AO3 SCRAPER CONSOLE ==================== */}
+            {/* ==================== 4. INTERNET ARCHIVE & AO3 IMPORTER CONSOLE ==================== */}
             {activeTab === 'scraper' && (
               <div className="space-y-8">
                 <div className="flex flex-wrap items-end justify-between gap-6 pb-6 border-b border-stone-200 dark:border-zinc-800">
                   <div className="space-y-2">
                     <p className="text-xs uppercase tracking-widest text-[#E11D48] font-medium">
-                      Live Archival Ingestion · archive.org/advancedsearch.php
+                      Unabridged Archival Ingestion · AO3 Downloads + archive.org
                     </p>
                     <h1 className="text-3xl lg:text-4xl font-serif-editorial font-semibold text-stone-900 dark:text-zinc-50">
-                      Internet Archive AO3 & Fanwork Scraper
+                      AO3 Importer &amp; Wayback Scraper
                     </h1>
                     <p className="text-sm text-stone-600 dark:text-zinc-400 max-w-2xl">
-                      Query the Internet Archive’s Organization for Transformative Works (`collection:ao3`) and historical fanfiction text repositories to populate and cache works for offline reading.
+                      Import complete multi-chapter works straight from AO3’s official HTML or EPUB downloads (bypassing Cloudflare and archive locks), recover full-work Wayback snapshots by AO3 URL, or search Internet Archive text repositories.
                     </p>
                   </div>
                   <span className="text-xs font-mono-tabular text-stone-500 dark:text-zinc-400">
@@ -2853,50 +3599,178 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                   </span>
                 </div>
 
-                {/* Scraper Query Bar */}
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <input
-                    type="text"
-                    value={scraperQuery}
-                    onChange={(e) => setScraperQuery(e.target.value)}
-                    placeholder="Enter fandom, trope, or archive keyword (e.g. Sherlock, Star Trek, Tolkien, Good Omens)..."
-                    className="flex-1 rounded border border-stone-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm text-stone-900 dark:text-zinc-100"
-                  />
-                  <button
-                    onClick={() => handleRunScraper()}
-                    disabled={isScraping}
-                    className="flex items-center justify-center gap-2 rounded bg-[#E11D48] px-6 py-2.5 text-xs font-medium text-white hover:bg-[#BE123C] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                {/* Direct AO3 Ingestion Grid: File Importer + Wayback Work URL Recovery */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Left 6 cols: Official AO3 HTML / EPUB / TXT Dropzone */}
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDraggingAo3File(true);
+                    }}
+                    onDragLeave={() => setIsDraggingAo3File(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDraggingAo3File(false);
+                      void handleAo3FilesSelected(e.dataTransfer.files);
+                    }}
+                    className={`lg:col-span-6 rounded-lg border-2 border-dashed p-6 space-y-4 transition-colors ${
+                      isDraggingAo3File
+                        ? 'border-[#E11D48] bg-[#E11D48]/5'
+                        : 'border-stone-300 dark:border-zinc-700 bg-white/50 dark:bg-[#121216]'
+                    }`}
                   >
-                    <Archive className="w-4 h-4" />
-                    <span>
-                      {isScraping ? 'Querying archive.org...' : 'Scrape Internet Archive'}
-                    </span>
-                  </button>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="space-y-1">
+                        <h2 className="text-lg font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
+                          Import AO3 HTML or EPUB Download
+                        </h2>
+                        <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed">
+                          On <span className="font-mono-tabular">archiveofourown.org</span>, click{' '}
+                          <strong className="font-medium text-stone-800 dark:text-zinc-200">
+                            Download → HTML
+                          </strong>{' '}
+                          (or{' '}
+                          <strong className="font-medium text-stone-800 dark:text-zinc-200">
+                            EPUB
+                          </strong>
+                          ) and drop one or multiple files here. Parses every chapter, author note, fandom, rating, and canonical tag offline.
+                        </p>
+                      </div>
+                      <Upload className="w-5 h-5 text-[#E11D48] shrink-0 mt-0.5" />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                      <label className="inline-flex items-center gap-2 rounded bg-[#E11D48] px-4 py-2 text-xs font-medium text-white hover:bg-[#BE123C] transition-colors cursor-pointer">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>
+                          {isImportingFiles ? 'Parsing AO3 File...' : 'Select .html / .epub / .txt'}
+                        </span>
+                        <input
+                          type="file"
+                          accept=".html,.htm,.xhtml,.epub,.txt"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            void handleAo3FilesSelected(e.target.files);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowPasteHtmlBox((prev) => !prev)}
+                        className="rounded border border-stone-300 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-stone-700 dark:text-zinc-300 hover:border-[#E11D48] transition-colors cursor-pointer"
+                      >
+                        {showPasteHtmlBox ? 'Hide HTML Paste Box' : 'Or Paste AO3 HTML Source'}
+                      </button>
+                    </div>
+
+                    {showPasteHtmlBox && (
+                      <div className="space-y-2 pt-2 border-t border-stone-200 dark:border-zinc-800">
+                        <textarea
+                          rows={4}
+                          value={pastedAo3Html}
+                          onChange={(e) => setPastedAo3Html(e.target.value)}
+                          placeholder="Paste raw HTML from an AO3 ?view_full_work=true page or downloaded .html file..."
+                          className="w-full rounded border border-stone-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-2.5 text-xs font-mono-tabular text-stone-900 dark:text-zinc-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleParsePastedAo3Html}
+                          className="rounded bg-stone-900 dark:bg-zinc-100 px-3.5 py-1.5 text-xs font-medium text-white dark:text-zinc-900 cursor-pointer"
+                        >
+                          Parse &amp; Open Unabridged Work
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right 6 cols: Direct AO3 Work URL -> Wayback Full-Work Snapshot Recovery */}
+                  <div className="lg:col-span-6 rounded-lg border border-stone-200 dark:border-zinc-800 bg-white/50 dark:bg-[#121216] p-6 space-y-4">
+                    <div className="space-y-1">
+                      <h2 className="text-lg font-serif-editorial font-semibold text-stone-900 dark:text-zinc-100">
+                        Recover AO3 Work URL via Wayback Machine
+                      </h2>
+                      <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed">
+                        Paste an <span className="font-mono-tabular">archiveofourown.org/works/ID</span>{' '}
+                        URL or numeric Work ID. Queries Wayback CDX specifically for{' '}
+                        <span className="font-mono-tabular">?view_full_work=true</span> captures or stitches all archived chapter pages automatically.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-2.5">
+                      <input
+                        type="text"
+                        value={ao3UrlInput}
+                        onChange={(e) => setAo3UrlInput(e.target.value)}
+                        placeholder="https://archiveofourown.org/works/123456 or 123456"
+                        className="flex-1 rounded border border-stone-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs text-stone-900 dark:text-zinc-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleRecoverAo3Wayback}
+                        disabled={isRecoveringAo3 || !ao3UrlInput.trim()}
+                        className="rounded bg-stone-900 dark:bg-zinc-100 px-4 py-2 text-xs font-medium text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {isRecoveringAo3 ? 'Checking Wayback...' : 'Recover Full Work'}
+                      </button>
+                    </div>
+
+                    {ao3ImportNotice && (
+                      <p className="text-xs text-stone-700 dark:text-zinc-300 pt-1 border-t border-stone-200/70 dark:border-zinc-800/70 leading-relaxed">
+                        {ao3ImportNotice}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
-                {/* Quick Fandom Collection Presets */}
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="text-stone-500 dark:text-zinc-400">Quick Collections:</span>
-                  {[
-                    'Sherlock',
-                    'Star Trek',
-                    'Tolkien',
-                    'Good Omens',
-                    'Doctor Who',
-                    'Marvel',
-                    'Harry Potter',
-                  ].map((term) => (
+                {/* Internet Archive Collection Search Bar */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="text"
+                      value={scraperQuery}
+                      onChange={(e) => setScraperQuery(e.target.value)}
+                      placeholder="Search archive.org fanworks by fandom, title, or trope (e.g. Sherlock, Star Trek, Tolkien, Good Omens)..."
+                      className="flex-1 rounded border border-stone-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm text-stone-900 dark:text-zinc-100"
+                    />
                     <button
-                      key={term}
-                      onClick={() => {
-                        setScraperQuery(term);
-                        handleRunScraper(term);
-                      }}
-                      className="px-3 py-1 rounded border border-stone-300 dark:border-zinc-700 hover:border-[#E11D48] text-stone-700 dark:text-zinc-300 transition-colors cursor-pointer"
+                      onClick={() => handleRunScraper()}
+                      disabled={isScraping}
+                      className="flex items-center justify-center gap-2 rounded bg-[#E11D48] px-6 py-2.5 text-xs font-medium text-white hover:bg-[#BE123C] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                     >
-                      {term}
+                      <Archive className="w-4 h-4" />
+                      <span>
+                        {isScraping ? 'Querying archive.org...' : 'Search Internet Archive'}
+                      </span>
                     </button>
-                  ))}
+                  </div>
+
+                  {/* Quick Fandom Collection Presets */}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-stone-500 dark:text-zinc-400">Quick Collections:</span>
+                    {[
+                      'Sherlock',
+                      'Star Trek',
+                      'Tolkien',
+                      'Good Omens',
+                      'Doctor Who',
+                      'Marvel',
+                      'Harry Potter',
+                    ].map((term) => (
+                      <button
+                        key={term}
+                        onClick={() => {
+                          setScraperQuery(term);
+                          handleRunScraper(term);
+                        }}
+                        className="px-3 py-1 rounded border border-stone-300 dark:border-zinc-700 hover:border-[#E11D48] text-stone-700 dark:text-zinc-300 transition-colors cursor-pointer"
+                      >
+                        {term}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Scraped Works Table / List */}
@@ -2954,6 +3828,20 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
                 </div>
               </div>
             )}
+
+            {/* ==================== 5. READING ROOM & OFFLINE CACHE TRADING ==================== */}
+            {activeTab === 'readingRoom' && (
+              <ReadingRoomView
+                allWorks={allWorks}
+                bookmarks={activeBookmarks}
+                peers={activePeers}
+                isSignedIn={!!user}
+                onUpsertPeer={handleUpsertPeer}
+                onDeletePeer={handleDeletePeer}
+                onImportWorksFromTrade={handleImportWorksFromTrade}
+                onNotify={showToast}
+              />
+            )}
           </>
         )}
       </main>
@@ -2961,11 +3849,16 @@ Aziraphale looked up from his notebook, his quill poised above a column of lunar
       {/* Quiet Archival Footer */}
       <footer className="mt-auto border-t border-stone-200 dark:border-zinc-800/80 py-6 px-6 lg:px-12 text-xs text-stone-500 dark:text-zinc-500">
         <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-4">
-          <span>
-            Archive of Our Own — Modern Folio PWA · Offline Tag Engine & Cloud Sync
+          <span className="flex items-center gap-2">
+            <img
+              src="/reading-owl-mascot.png"
+              alt="The Reading Owl"
+              className="w-5 h-5 rounded-full border border-amber-500/30 object-cover"
+            />
+            <span>Archive Mine Own · Offline Reading Room, Marginalia Editions &amp; Cloud Sync</span>
           </span>
           <span>
-            Archival texts sourced via Internet Archive Open Doors & Transformative Works collections
+            Preserving personal libraries via peer-to-peer Reading Room trades &amp; Internet Archive Open Doors
           </span>
         </div>
       </footer>
