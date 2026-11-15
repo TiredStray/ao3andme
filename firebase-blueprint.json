@@ -1,0 +1,415 @@
+{
+  "entities": {
+    "Work": {
+      "title": "Work",
+      "description": "An archival or user-authored fanwork stored in the modern AO3 repository.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Title of the work",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display pen name of the author",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the work creator",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fandom": {
+          "type": "string",
+          "description": "Primary fandom or canon archive category",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "rating": {
+          "type": "string",
+          "description": "AO3 content rating classification",
+          "enum": [
+            "General Audiences",
+            "Teen And Up Audiences",
+            "Mature",
+            "Explicit",
+            "Not Rated"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "description": "Relationship category classification",
+          "enum": [
+            "Gen",
+            "F/F",
+            "F/M",
+            "M/M",
+            "Multi",
+            "Other"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "description": "Publication lifecycle status; Archived is a terminal state",
+          "enum": [
+            "In Progress",
+            "Completed",
+            "Archived"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "description": "Editorial summary or abstract of the work",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "content": {
+          "type": "string",
+          "description": "Full text body of the manuscript",
+          "minLength": 1,
+          "maxLength": 50000
+        },
+        "tags": {
+          "type": "array",
+          "description": "Bounded list of up to 10 canonical tags for filtering",
+          "maxLength": 10
+        },
+        "wordCount": {
+          "type": "integer",
+          "description": "Total word count of the manuscript"
+        },
+        "chapterCount": {
+          "type": "integer",
+          "description": "Current published chapter count"
+        },
+        "totalChapters": {
+          "type": "integer",
+          "description": "Planned total chapters (0 if unknown)"
+        },
+        "kudosCount": {
+          "type": "integer",
+          "description": "Aggregate kudos given by readers"
+        },
+        "hitsCount": {
+          "type": "integer",
+          "description": "Aggregate reading hits"
+        },
+        "bookmarksCount": {
+          "type": "integer",
+          "description": "Aggregate public bookmarks count"
+        },
+        "sourceArchiveId": {
+          "type": "string",
+          "description": "Internet Archive identifier if scraped, or 'original'",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "visibility": {
+          "type": "string",
+          "description": "Access visibility rule flag",
+          "enum": [
+            "public",
+            "private"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modification server timestamp"
+        }
+      },
+      "required": [
+        "title",
+        "authorName",
+        "authorUid",
+        "fandom",
+        "rating",
+        "category",
+        "status",
+        "summary",
+        "content",
+        "tags",
+        "wordCount",
+        "chapterCount",
+        "totalChapters",
+        "kudosCount",
+        "hitsCount",
+        "bookmarksCount",
+        "sourceArchiveId",
+        "visibility",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkVersion": {
+      "title": "WorkVersion",
+      "description": "Immutable version control commit snapshot belonging to an author's Work.",
+      "type": "object",
+      "properties": {
+        "workId": {
+          "type": "string",
+          "description": "Parent work document ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the work owner",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "versionLabel": {
+          "type": "string",
+          "description": "Semantic version tag or revision title",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "commitNote": {
+          "type": "string",
+          "description": "Author's changelog notes for this revision",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "contentSnapshot": {
+          "type": "string",
+          "description": "Full manuscript text snapshot at commit time",
+          "minLength": 1,
+          "maxLength": 50000
+        },
+        "wordCount": {
+          "type": "integer",
+          "description": "Word count at the time of snapshot"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp of commit"
+        }
+      },
+      "required": [
+        "workId",
+        "authorUid",
+        "versionLabel",
+        "commitNote",
+        "contentSnapshot",
+        "wordCount",
+        "createdAt"
+      ]
+    },
+    "WorkFeedback": {
+      "title": "WorkFeedback",
+      "description": "Structured reader feedback and analytics entry on a specific work.",
+      "type": "object",
+      "properties": {
+        "workId": {
+          "type": "string",
+          "description": "Parent work document ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "readerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the submitting reader",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "readerName": {
+          "type": "string",
+          "description": "Display name of the reader",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "chapterNumber": {
+          "type": "integer",
+          "description": "Chapter number referenced by this feedback"
+        },
+        "dimension": {
+          "type": "string",
+          "description": "Analytical dimension rated by the reader",
+          "enum": [
+            "Pacing",
+            "Characterization",
+            "Worldbuilding",
+            "Prose Style",
+            "Emotional Impact"
+          ]
+        },
+        "score": {
+          "type": "integer",
+          "description": "Score from 1 to 5 on the selected dimension"
+        },
+        "comment": {
+          "type": "string",
+          "description": "Direct reader feedback note or paragraph reaction",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "visibility": {
+          "type": "string",
+          "description": "Visibility of the feedback entry",
+          "enum": [
+            "public"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp"
+        }
+      },
+      "required": [
+        "workId",
+        "readerUid",
+        "readerName",
+        "chapterNumber",
+        "dimension",
+        "score",
+        "comment",
+        "visibility",
+        "createdAt"
+      ]
+    },
+    "Bookmark": {
+      "title": "Bookmark",
+      "description": "Cloud-synced personal reading progress and bookmark record scoped to an authenticated user.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the bookmark owner",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ficSlug": {
+          "type": "string",
+          "description": "Unique identifier of the bookmarked work (local or Internet Archive)",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ficTitle": {
+          "type": "string",
+          "description": "Cached title of the work for offline and dashboard display",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "ficAuthor": {
+          "type": "string",
+          "description": "Cached author name of the work",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "ficFandom": {
+          "type": "string",
+          "description": "Cached fandom of the work",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "currentChapter": {
+          "type": "integer",
+          "description": "Current chapter reached by the reader"
+        },
+        "totalChapters": {
+          "type": "integer",
+          "description": "Total chapters in the work"
+        },
+        "progressPercent": {
+          "type": "integer",
+          "description": "Reading completion percentage (0 to 100)"
+        },
+        "readingStatus": {
+          "type": "string",
+          "description": "Reader shelf status; Archived is terminal",
+          "enum": [
+            "Reading",
+            "Marked for Later",
+            "Completed",
+            "Archived"
+          ]
+        },
+        "personalNotes": {
+          "type": "string",
+          "description": "Reader private bookmark notes and quotes",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "userTags": {
+          "type": "array",
+          "description": "Bounded list of up to 10 personal bookmark tags",
+          "maxLength": 10
+        },
+        "isFavorite": {
+          "type": "boolean",
+          "description": "Whether the work is pinned to favorites"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last synced server timestamp"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "ficSlug",
+        "ficTitle",
+        "ficAuthor",
+        "ficFandom",
+        "currentChapter",
+        "totalChapters",
+        "progressPercent",
+        "readingStatus",
+        "personalNotes",
+        "userTags",
+        "isFavorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/works/{workId}": {
+      "schema": {
+        "$ref": "#/entities/Work"
+      },
+      "description": "Top-level repository of fanworks and scraped archival texts."
+    },
+    "/works/{workId}/versions/{versionId}": {
+      "schema": {
+        "$ref": "#/entities/WorkVersion"
+      },
+      "description": "Subcollection of immutable author version control snapshots for a work."
+    },
+    "/works/{workId}/feedback/{feedbackId}": {
+      "schema": {
+        "$ref": "#/entities/WorkFeedback"
+      },
+      "description": "Subcollection of structured reader feedback and analytical ratings for a work."
+    },
+    "/bookmarks/{bookmarkId}": {
+      "schema": {
+        "$ref": "#/entities/Bookmark"
+      },
+      "description": "Cloud-synchronized reading progress and bookmarks per user."
+    }
+  }
+}

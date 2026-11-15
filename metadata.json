@@ -1,0 +1,6 @@
+{
+  "name": "Archive of Our Own — Modern Folio PWA",
+  "description": "A modern dark-mode Archive of Our Own (AO3) Progressive Web App featuring offline tag filtering, Internet Archive fanwork scraping, cloud-synced bookmarks and reading progress dashboard, and an author studio with version control and reader feedback analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

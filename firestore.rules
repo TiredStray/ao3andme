@@ -1,0 +1,282 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap)
+    function isValidWork(data) {
+      return data.keys().hasAll([
+        'title', 'authorName', 'authorUid', 'fandom', 'rating', 'category',
+        'status', 'summary', 'content', 'tags', 'wordCount', 'chapterCount',
+        'totalChapters', 'kudosCount', 'hitsCount', 'bookmarksCount',
+        'sourceArchiveId', 'visibility', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'title', 'authorName', 'authorUid', 'fandom', 'rating', 'category',
+        'status', 'summary', 'content', 'tags', 'wordCount', 'chapterCount',
+        'totalChapters', 'kudosCount', 'hitsCount', 'bookmarksCount',
+        'sourceArchiveId', 'visibility', 'createdAt', 'updatedAt'
+      ]) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+      data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 100 &&
+      data.authorUid is string && isValidId(data.authorUid) &&
+      data.fandom is string && data.fandom.size() >= 1 && data.fandom.size() <= 150 &&
+      data.rating is string && data.rating in ['General Audiences', 'Teen And Up Audiences', 'Mature', 'Explicit', 'Not Rated'] &&
+      data.category is string && data.category in ['Gen', 'F/F', 'F/M', 'M/M', 'Multi', 'Other'] &&
+      data.status is string && data.status in ['In Progress', 'Completed', 'Archived'] &&
+      data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 2000 &&
+      data.content is string && data.content.size() >= 1 && data.content.size() <= 50000 &&
+      data.tags is list && data.tags.size() >= 1 && data.tags.size() <= 10 &&
+      data.tags[0] is string && data.tags[0].size() >= 1 && data.tags[0].size() <= 60 &&
+      data.wordCount is int && data.wordCount >= 0 && data.wordCount <= 1000000 &&
+      data.chapterCount is int && data.chapterCount >= 1 && data.chapterCount <= 1000 &&
+      data.totalChapters is int && data.totalChapters >= 0 && data.totalChapters <= 1000 &&
+      data.kudosCount is int && data.kudosCount >= 0 && data.kudosCount <= 10000000 &&
+      data.hitsCount is int && data.hitsCount >= 0 && data.hitsCount <= 100000000 &&
+      data.bookmarksCount is int && data.bookmarksCount >= 0 && data.bookmarksCount <= 10000000 &&
+      data.sourceArchiveId is string && data.sourceArchiveId.size() >= 1 && data.sourceArchiveId.size() <= 120 &&
+      data.visibility is string && data.visibility in ['public', 'private'] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidWorkVersion(data) {
+      return data.keys().hasAll([
+        'workId', 'authorUid', 'versionLabel', 'commitNote',
+        'contentSnapshot', 'wordCount', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'workId', 'authorUid', 'versionLabel', 'commitNote',
+        'contentSnapshot', 'wordCount', 'createdAt'
+      ]) &&
+      data.workId is string && isValidId(data.workId) &&
+      data.authorUid is string && isValidId(data.authorUid) && data.authorUid == request.auth.uid &&
+      data.versionLabel is string && data.versionLabel.size() >= 1 && data.versionLabel.size() <= 80 &&
+      data.commitNote is string && data.commitNote.size() >= 1 && data.commitNote.size() <= 500 &&
+      data.contentSnapshot is string && data.contentSnapshot.size() >= 1 && data.contentSnapshot.size() <= 50000 &&
+      data.wordCount is int && data.wordCount >= 0 && data.wordCount <= 1000000 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidWorkFeedback(data) {
+      return data.keys().hasAll([
+        'workId', 'readerUid', 'readerName', 'chapterNumber',
+        'dimension', 'score', 'comment', 'visibility', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'workId', 'readerUid', 'readerName', 'chapterNumber',
+        'dimension', 'score', 'comment', 'visibility', 'createdAt'
+      ]) &&
+      data.workId is string && isValidId(data.workId) &&
+      data.readerUid is string && isValidId(data.readerUid) && data.readerUid == request.auth.uid &&
+      data.readerName is string && data.readerName.size() >= 1 && data.readerName.size() <= 80 &&
+      data.chapterNumber is int && data.chapterNumber >= 1 && data.chapterNumber <= 1000 &&
+      data.dimension is string && data.dimension in ['Pacing', 'Characterization', 'Worldbuilding', 'Prose Style', 'Emotional Impact'] &&
+      data.score is int && data.score >= 1 && data.score <= 5 &&
+      data.comment is string && data.comment.size() >= 1 && data.comment.size() <= 1000 &&
+      data.visibility is string && data.visibility == 'public' &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidBookmark(data) {
+      return data.keys().hasAll([
+        'ownerUid', 'ficSlug', 'ficTitle', 'ficAuthor', 'ficFandom',
+        'currentChapter', 'totalChapters', 'progressPercent', 'readingStatus',
+        'personalNotes', 'userTags', 'isFavorite', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerUid', 'ficSlug', 'ficTitle', 'ficAuthor', 'ficFandom',
+        'currentChapter', 'totalChapters', 'progressPercent', 'readingStatus',
+        'personalNotes', 'userTags', 'isFavorite', 'createdAt', 'updatedAt'
+      ]) &&
+      data.ownerUid is string && isValidId(data.ownerUid) && data.ownerUid == request.auth.uid &&
+      data.ficSlug is string && isValidId(data.ficSlug) &&
+      data.ficTitle is string && data.ficTitle.size() >= 1 && data.ficTitle.size() <= 200 &&
+      data.ficAuthor is string && data.ficAuthor.size() >= 1 && data.ficAuthor.size() <= 100 &&
+      data.ficFandom is string && data.ficFandom.size() >= 1 && data.ficFandom.size() <= 150 &&
+      data.currentChapter is int && data.currentChapter >= 1 && data.currentChapter <= 1000 &&
+      data.totalChapters is int && data.totalChapters >= 0 && data.totalChapters <= 1000 &&
+      data.progressPercent is int && data.progressPercent >= 0 && data.progressPercent <= 100 &&
+      data.readingStatus is string && data.readingStatus in ['Reading', 'Marked for Later', 'Completed', 'Archived'] &&
+      data.personalNotes is string && data.personalNotes.size() >= 0 && data.personalNotes.size() <= 1000 &&
+      data.userTags is list && data.userTags.size() >= 1 && data.userTags.size() <= 10 &&
+      data.userTags[0] is string && data.userTags[0].size() >= 1 && data.userTags[0].size() <= 60 &&
+      data.isFavorite is bool &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules: /works/{workId}
+    match /works/{workId} {
+      allow get: if isValidId(workId) && (
+        existing().visibility == 'public' ||
+        (isSignedIn() && existing().authorUid == request.auth.uid)
+      );
+
+      allow list: if existing().visibility == 'public' ||
+        (isSignedIn() && existing().authorUid == request.auth.uid);
+
+      allow create: if isVerifiedUser() &&
+        isValidId(workId) &&
+        isValidWork(incoming()) &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(workId) &&
+        isValidWork(incoming()) &&
+        existing().status != 'Archived' &&
+        incoming().authorUid == existing().authorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().sourceArchiveId == existing().sourceArchiveId &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Tier 1 Author Manuscript & Metadata Revision
+          (
+            existing().authorUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'authorName', 'fandom', 'rating', 'category',
+              'status', 'summary', 'content', 'tags', 'wordCount',
+              'chapterCount', 'totalChapters', 'visibility', 'updatedAt'
+            ])
+          ) ||
+          // Action 2: Tier 2 Reader Engagement Counter Increment (Kudos / Hits / Bookmarks)
+          (
+            existing().visibility == 'public' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'kudosCount', 'hitsCount', 'bookmarksCount', 'updatedAt'
+            ]) &&
+            incoming().kudosCount >= existing().kudosCount &&
+            incoming().kudosCount <= existing().kudosCount + 1 &&
+            incoming().hitsCount >= existing().hitsCount &&
+            incoming().hitsCount <= existing().hitsCount + 1 &&
+            incoming().bookmarksCount >= existing().bookmarksCount - 1 &&
+            incoming().bookmarksCount <= existing().bookmarksCount + 1
+          )
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(workId) &&
+        existing().authorUid == request.auth.uid;
+
+      // Subcollection: /works/{workId}/versions/{versionId}
+      match /versions/{versionId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(workId) &&
+          isValidId(versionId) &&
+          existing().authorUid == request.auth.uid &&
+          get(/databases/$(database)/documents/works/$(workId)).data.authorUid == request.auth.uid;
+
+        allow list: if isVerifiedUser() &&
+          existing().authorUid == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(workId) &&
+          isValidId(versionId) &&
+          isValidWorkVersion(incoming()) &&
+          incoming().workId == workId &&
+          incoming().createdAt == request.time &&
+          get(/databases/$(database)/documents/works/$(workId)).data.authorUid == request.auth.uid &&
+          get(/databases/$(database)/documents/works/$(workId)).data.status != 'Archived';
+
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(workId) &&
+          isValidId(versionId) &&
+          existing().authorUid == request.auth.uid &&
+          get(/databases/$(database)/documents/works/$(workId)).data.authorUid == request.auth.uid;
+      }
+
+      // Subcollection: /works/{workId}/feedback/{feedbackId}
+      match /feedback/{feedbackId} {
+        allow get: if isValidId(workId) &&
+          isValidId(feedbackId) &&
+          existing().visibility == 'public' &&
+          exists(/databases/$(database)/documents/works/$(workId));
+
+        allow list: if existing().visibility == 'public';
+
+        allow create: if isVerifiedUser() &&
+          isValidId(workId) &&
+          isValidId(feedbackId) &&
+          isValidWorkFeedback(incoming()) &&
+          incoming().workId == workId &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/works/$(workId));
+
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(workId) &&
+          isValidId(feedbackId) &&
+          existing().readerUid == request.auth.uid &&
+          exists(/databases/$(database)/documents/works/$(workId));
+      }
+    }
+
+    // 5. Collection Rules: /bookmarks/{bookmarkId}
+    match /bookmarks/{bookmarkId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(bookmarkId) &&
+        existing().ownerUid == request.auth.uid;
+
+      allow list: if isVerifiedUser() &&
+        existing().ownerUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(bookmarkId) &&
+        isValidBookmark(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(bookmarkId) &&
+        isValidBookmark(incoming()) &&
+        existing().ownerUid == request.auth.uid &&
+        existing().readingStatus != 'Archived' &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().ficSlug == existing().ficSlug &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Update Reading Progress & Shelf Status
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'currentChapter', 'totalChapters', 'progressPercent',
+            'readingStatus', 'personalNotes', 'userTags', 'isFavorite',
+            'ficTitle', 'ficAuthor', 'ficFandom', 'updatedAt'
+          ])
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(bookmarkId) &&
+        existing().ownerUid == request.auth.uid;
+    }
+  }
+}
